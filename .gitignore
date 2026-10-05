@@ -1,0 +1,46 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+credentials*.json
+*-credentials.json
+service-account*.json
+service_account*.json
+*-key.json
+application_default_credentials.json
+.secrets/
+secrets/
+*.pem
+*.key
+
+# Python tooling
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Runtime data, reports and telemetry
+data/
+runtime/
+reports/
+traces/
+logs/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.log
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
