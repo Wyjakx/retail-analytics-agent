@@ -1,10 +1,10 @@
 # Proposed implementation plan
 
-**Status: planning only. The prototype is not built, live services are unverified, and no deployment is claimed.**
+**Status: the first local prototype is implemented and offline-tested. This sequence records the build scope; remaining work is live validation, client clarifications and human report/UX review. No deployment is claimed.**
 
 Build a local Google ADK 2 + Gemini CLI using BigQuery, SQLite and Rich. Implement safety, report confirmation, resilience and observability. Keep Golden retrieval, preference learning, persona administration and production infrastructure design-only. See [architecture.md](architecture.md).
 
-## Estimated sequence
+## Build sequence and acceptance
 
 Allow **6–12 hours of focused implementation**, assuming working credentials and a known schema. Provisioning and deployment are excluded; this is an estimate, not a guarantee.
 
@@ -44,6 +44,8 @@ Build report ownership before deletion selection. Freeze IDs/versions at preview
 Numerical/security checks are deterministic; human review assesses intent and UX. Live validation is separate from fixture tests and must be reported accurately.
 
 ## Demonstration and next milestones
+
+The executable offline demonstration is `retail-agent --demo --show-plan`. Setup and live-mode instructions are in the [README](../README.md). The actual results and validation limits are recorded in [evaluation](evaluation.md), with decisions explained in [development notes](development-notes.md).
 
 Demonstrate analysis, comparison/follow-up, PII refusal, save/delete/cancel and a controlled failure. Use sanitized examples and demo identities. Keep local databases, traces and generated reports outside version control.
 

@@ -1,28 +1,30 @@
 # Proposed architecture
 
-**Status: design proposal. The application is not implemented, live integrations are unverified, and no deployment is claimed.**
+**Status: local prototype implemented and offline-tested. Live integrations remain unverified; the production HLD is a design proposal and no deployment is claimed.**
 
-The assistant will translate retail questions into bounded analyses and explain computed results. Gemini proposes plans and wording; Python enforces permissions, privacy, budgets and report operations. The proposed stack is Google ADK 2, Gemini, BigQuery, SQLite and Rich. ADK provides explicit graph workflows combining Python functions and model-driven steps, fitting the assignment's Google services. The selected package baseline is `google-adk==2.11.0`; installation and integration remain to be tested. [ADK graph workflows](https://adk.dev/graphs/), [released package](https://pypi.org/project/google-adk/2.11.0/).
+The assistant translates retail questions into bounded analyses and explains computed results. Gemini proposes plans and wording; Python enforces permissions, privacy, budgets and report operations. The stack is Google ADK 2, Gemini, BigQuery, SQLite and Rich. ADK provides explicit graph workflows combining Python functions and model-driven steps, fitting the assignment's Google services. The installed baseline is `google-adk==2.11.0`; typed-output workflows were exercised with a fake ADK model, while real service calls remain unverified. [ADK graph workflows](https://adk.dev/graphs/), [released package](https://pypi.org/project/google-adk/2.11.0/).
 
 ## Prototype scope
 
-The prototype will implement safe analysis, owned-report confirmation, resilience and observability in a local CLI. Evaluation will check these behaviors. Golden retrieval, preference learning and persona administration remain HLD-only, alongside production authentication, hosting and future tools. Session context supports follow-ups without claiming preference learning.
+The local prototype implements analysis, owned-report confirmation, bounded failures and correlated metadata in a CLI. Numerical and adversarial tests check these behaviors. Golden retrieval, preference learning and persona administration remain HLD-only, alongside production authentication, hosting and future tools. Session context supports follow-ups without claiming preference learning.
 
-BigQuery will query configured tables in `bigquery-public-data.thelook_ecommerce`. Verify schemas, joins, location and usable dates before execution. SQLite holds sanitized conversation metadata, report ownership and pending confirmations; Rich handles presentation. Map ADK sessions to trusted actor/conversation identities and validate the chosen session adapter during implementation. Application policy controls access to both stores.
+The live gateway queries configured tables in `bigquery-public-data.thelook_ecommerce`, validating required schema fields and location before execution. Actual joins, types and usable dates still need live verification. SQLite holds report ownership and pending confirmations; sanitized conversation state remains in application memory. Each ADK model stage uses an ephemeral session with approved context. Rich handles presentation. Application policy controls every operation.
 
 ```mermaid
 flowchart LR
     U["Demo user"] --> CLI["Rich CLI"]
     CLI --> APP["Application: actor and policy"]
-    APP --> G["Google ADK 2 workflow"]
-    G --> M["Gemini via ADK"]
-    G --> Q["Validated plan and SQL compiler"]
+    APP --> P["ADK planning graph: Gemini then validation"]
+    P --> APP
+    APP --> Q["Validated plan and SQL compiler"]
     Q --> BQ["Restricted BigQuery gateway"]
     BQ --> A["Approved aggregates"]
-    A --> G
+    A --> APP
+    APP --> S["ADK reporting graph: Gemini then validation"]
+    S --> APP
     APP --> R["Reports and confirmation"]
     R --> DB[("SQLite")]
-    G --> T["Redacted events"]
+    APP --> T["Redacted events"]
     R --> T
 ```
 
@@ -34,7 +36,7 @@ The operation catalog should compose aggregates, comparisons and contribution br
 
 This restricts expressiveness compared with unrestricted model SQL, but makes calculations and authorization auditable. Unsupported operations require clarification or a limitation; there is no raw-SQL fallback. **Acceptance requires a genuine multi-step comparison and follow-up, not fixed prompt-to-query mappings.** Expand the catalog if it cannot express the agreed evaluation questions.
 
-Use a configurable Gemini model through ADK and expose custom analysis tools with typed contracts. Each tool rechecks actor scope, validates the plan and enforces budgets before calling the gateway. The workflow exposes only these guarded operations. Bound every correction cycle and model-driven step explicitly; graph routing alone does not impose a retry or cost limit. [ADK graph workflows](https://adk.dev/graphs/), [graph routes](https://adk.dev/graphs/routes/).
+Use a configurable Gemini model through ADK with typed planning/report contracts. The Python application rechecks actor scope, validates every planned operation and enforces budgets before calling the gateway. No SQL, database or deletion tools are exposed to the model. Each ADK graph runs a model node followed by Python output validation. Correction and transient attempts have explicit limits; graph routing alone does not impose a retry or cost limit. [ADK graph workflows](https://adk.dev/graphs/), [graph routes](https://adk.dev/graphs/routes/).
 
 ## Safety and PII
 
@@ -42,7 +44,7 @@ Resolve product entitlements from trusted storage, never prompts. Apply scope be
 
 Return approved aggregates and coarse dimensions. Names, emails, addresses, exact locations and raw customer identifiers must not reach model context or output. Internal IDs may support distinct counts. Intake redaction, minimum-group suppression and output validation add protection; repeated-query inference needs further production controls.
 
-Customer ranking introduces a separate tradeoff: session-specific pseudonymous labels avoid showing identities but remain linkable and potentially identifying. Aggregate segment rankings are the safer default. Any individual ranking needs an explicit privacy decision and evaluation; pseudonymization does not make it anonymous.
+Customer ranking introduces a separate tradeoff: pseudonymous labels remain linkable and potentially identifying. Individual customer rankings are disabled pending an explicit privacy decision. The implemented catalog supports aggregate segment comparisons, not top-by-metric ranking. Pseudonymization does not make customer outputs anonymous.
 
 A selectable local actor demonstrates authorization rules, not authentication. Shared BigQuery credentials identify the backend principal, not the executive. Production needs restricted analytics views/columns and a reviewed identity-to-policy design. [BigQuery row security](https://docs.cloud.google.com/bigquery/docs/row-level-security-intro).
 
@@ -79,11 +81,13 @@ flowchart TB
     ING["Ingestion and analyst review"] --> GOLD
     ING --> IDX
     ADMIN["Role-restricted configuration admin"] --> DB
-    APP --> JOB["Queue and cleanup/rendering workers"]
+    APP --> JOB["Cloud Tasks and Cloud Run workers"]
     APP --> OBS["OpenTelemetry, Logging, Monitoring"]
 ```
 
 Cloud SQL provides transactional ownership and configuration; Cloud Storage holds artifacts. Scoped service identities and Secret Manager govern credentials. Verify the managed model endpoint, residency, retention, backup/restore and availability requirements before deployment.
+
+Cloud Tasks would dispatch rendering and cleanup work to authenticated Cloud Run HTTP workers. Each worker uses a persisted operation ID to make repeated delivery safe and records the final outcome before acknowledging success. This is part of the HLD, not the CLI implementation. [Cloud Tasks HTTP targets](https://docs.cloud.google.com/tasks/docs/creating-http-target-tasks).
 
 ### Hybrid intelligence
 
@@ -97,9 +101,9 @@ A nondeveloper admin interface publishes versioned tone/format settings without 
 
 ### Resilience and cost
 
-Start with configurable caps: three planned data operations, one correction cycle and a request deadline. Bound transient retries separately. Dry-run queries, enforce `maximum_bytes_billed` plus a cumulative turn budget, and track actual statistics; `LIMIT` is not a general scan-cost control. [BigQuery cost guidance](https://docs.cloud.google.com/bigquery/docs/best-practices-costs).
+The prototype caps each turn at three query attempts, one correction cycle, six model calls including retries, and a request deadline. A model stage permits up to two transient retries under its deadline. Dry-run queries, enforce `maximum_bytes_billed` plus a cumulative turn budget, and track actual statistics; `LIMIT` is not a general scan-cost control. A canceled budget blocks new query submissions and requests best-effort job cancellation. [BigQuery cost guidance](https://docs.cloud.google.com/bigquery/docs/best-practices-costs).
 
-Detect invalid plans, syntax/schema errors and empty results; attempt one equivalent correction without changing scope. Compiler defects require code repair. Permission/budget failures stop safely. Reconcile uncertain jobs by ID; report deletion succeeds only after commit. Production adds circuit breakers and background workers.
+Invalid plans, rejected queries and empty results enter at most one correction cycle. Query corrections must preserve the validated filters, period and metrics. Privacy-suppressed results do not trigger attempts to widen the query. Compiler defects require code repair and incompatible schemas stop safely. Permission/budget failures stop safely. Uncertain submissions reconcile by an explicit job ID and request cancellation without resubmitting. Report synthesis can fall back to approved aggregate facts. Deletion succeeds only after commit. Production adds circuit breakers and background workers.
 
 ### Observability and quality assurance
 
