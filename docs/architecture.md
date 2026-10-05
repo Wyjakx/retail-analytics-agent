@@ -2,20 +2,20 @@
 
 **Status: design proposal. The application is not implemented, live integrations are unverified, and no deployment is claimed.**
 
-The assistant will translate retail questions into bounded analyses and explain computed results. Gemini proposes plans and wording; Python enforces permissions, privacy, budgets and report operations. The proposed stack is LangGraph, `google-genai`, BigQuery, SQLite and Rich. LangGraph is selected for explicit state control and the author's reported framework experience. It supports deterministic and model-driven steps without requiring LangChain. [LangGraph documentation](https://docs.langchain.com/oss/python/langgraph/overview).
+The assistant will translate retail questions into bounded analyses and explain computed results. Gemini proposes plans and wording; Python enforces permissions, privacy, budgets and report operations. The proposed stack is Google ADK 2, Gemini, BigQuery, SQLite and Rich. ADK provides explicit graph workflows combining Python functions and model-driven steps, fitting the assignment's Google services. The selected package baseline is `google-adk==2.11.0`; installation and integration remain to be tested. [ADK graph workflows](https://adk.dev/graphs/), [released package](https://pypi.org/project/google-adk/2.11.0/).
 
 ## Prototype scope
 
 The prototype will implement safe analysis, owned-report confirmation, resilience and observability in a local CLI. Evaluation will check these behaviors. Golden retrieval, preference learning and persona administration remain HLD-only, alongside production authentication, hosting and future tools. Session context supports follow-ups without claiming preference learning.
 
-BigQuery will query configured tables in `bigquery-public-data.thelook_ecommerce`. Verify schemas, joins, location and usable dates before execution. SQLite holds sessions, report ownership and pending confirmations; Rich handles presentation. Neither defines access policy.
+BigQuery will query configured tables in `bigquery-public-data.thelook_ecommerce`. Verify schemas, joins, location and usable dates before execution. SQLite holds sanitized conversation metadata, report ownership and pending confirmations; Rich handles presentation. Map ADK sessions to trusted actor/conversation identities and validate the chosen session adapter during implementation. Application policy controls access to both stores.
 
 ```mermaid
 flowchart LR
     U["Demo user"] --> CLI["Rich CLI"]
     CLI --> APP["Application: actor and policy"]
-    APP --> G["LangGraph workflow"]
-    G --> M["Gemini via google-genai"]
+    APP --> G["Google ADK 2 workflow"]
+    G --> M["Gemini via ADK"]
     G --> Q["Validated plan and SQL compiler"]
     Q --> BQ["Restricted BigQuery gateway"]
     BQ --> A["Approved aggregates"]
@@ -34,7 +34,7 @@ The operation catalog should compose aggregates, comparisons and contribution br
 
 This restricts expressiveness compared with unrestricted model SQL, but makes calculations and authorization auditable. Unsupported operations require clarification or a limitation; there is no raw-SQL fallback. **Acceptance requires a genuine multi-step comparison and follow-up, not fixed prompt-to-query mappings.** Expand the catalog if it cannot express the agreed evaluation questions.
 
-Use a configurable Gemini model and manually dispatch tools. The SDK can automatically execute supplied Python functions; application-controlled dispatch preserves the policy gate. [Google Gen AI SDK](https://googleapis.github.io/python-genai/).
+Use a configurable Gemini model through ADK and expose custom analysis tools with typed contracts. Each tool rechecks actor scope, validates the plan and enforces budgets before calling the gateway. The workflow exposes only these guarded operations. Bound every correction cycle and model-driven step explicitly; graph routing alone does not impose a retry or cost limit. [ADK graph workflows](https://adk.dev/graphs/), [graph routes](https://adk.dev/graphs/routes/).
 
 ## Safety and PII
 
@@ -52,6 +52,8 @@ Store owner, conversation, content, evidence references and version. Support own
 
 Preview exact titles/count and freeze IDs/versions in an expiring pending operation. Require a distinct confirmation identifier through the CLI, outside model control. Recheck actor, ownership, versions, expiry and unused state transactionally; delete only those targets and consume confirmation atomically. Changed targets require a new preview. New reports created after preview survive. Cancel, expiry and no-match leave reports unchanged; replay returns the recorded outcome. Audit metadata must not retain deleted content.
 
+Keep this approval transaction in an application service independent of ADK session state. ADK 2.11.0 adds workflow tool confirmation, while its confirmation documentation still describes experimental support and session-service limitations. Native confirmation can be evaluated later without changing the report-ownership boundary. [ADK 2.11.0 release notes](https://github.com/google/adk-python/releases/tag/v2.11.0), [confirmation documentation](https://adk.dev/tools-custom/confirmation/).
+
 ## Grounding and definitions
 
 Define statuses, returns, currency, dates and denominators in the metric catalog. Spend per customer must state whether it covers purchasing customers within permitted products. Inactivity-based churn is a proposed proxy requiring a cohort, threshold and sufficient observation window.
@@ -65,7 +67,7 @@ GCP is proposed because the source is BigQuery and the model family is Gemini. I
 ```mermaid
 flowchart TB
     U["Executive client"] --> API["OIDC-authenticated API on Cloud Run"]
-    API --> APP["Policy and LangGraph worker"]
+    API --> APP["Policy and ADK workflow worker"]
     APP --> M["Approved managed Gemini endpoint"]
     APP --> Q["Restricted analytics gateway"]
     Q --> BQ["Controlled BigQuery dataset"]
@@ -101,7 +103,7 @@ Detect invalid plans, syntax/schema errors and empty results; attempt one equiva
 
 ### Observability and quality assurance
 
-Link message, request, graph stage, query/job and report/operation IDs. Track latency, outcomes, repairs, refusals, tokens, bytes and dependency failures. Default logs exclude raw prompts, source rows and report bodies. Restricted diagnostics retain sanitized plan/query provenance for reproduction.
+Link message, request, workflow stage, query/job and report/operation IDs. Track latency, outcomes, repairs, refusals, tokens, bytes and dependency failures. Default logs exclude raw prompts, source rows and report bodies. Restricted diagnostics retain sanitized plan/query provenance for reproduction.
 
 Use known-answer fixtures for arithmetic and authorization, adversarial cases for privacy/confirmation, and human review for intent and clarity. Gate release on passing supported analytical cases and no known safety failures in the suite. UX sessions assess comprehension, clarification and deletion recovery. Establish performance targets after measurement; a passing suite is not universal safety proof.
 

@@ -1,6 +1,6 @@
 # Retail Analytics Agent
 
-A conversational analytics assistant for retail executives, using Python, LangGraph, Gemini and BigQuery.
+A conversational analytics assistant for retail executives, using Python, Google ADK 2, Gemini and BigQuery.
 
 **Status: design and repository foundation.** The analytical workflow and chat CLI have not been implemented yet. This repository records the intended solution and its acceptance criteria; proposed controls are not claims about working software.
 
@@ -15,10 +15,10 @@ Report deletion follows a separate flow: identify the current user's matching re
 | Component | Choice | Responsibility |
 | --- | --- | --- |
 | Chat interface | Rich-based Python CLI | Conversation, tables, progress and confirmation previews |
-| Orchestration | LangGraph | Typed state, explicit routes, bounded repair and tool dispatch |
-| Model adapter | Google GenAI SDK with Gemini | Analysis planning and grounded report generation |
+| Orchestration | Google ADK 2 | Typed workflows, explicit routes, bounded repair and tool execution |
+| Model integration | Gemini through ADK | Analysis planning and grounded report generation |
 | Analytics gateway | BigQuery Python client | Trusted product scope, controlled SQL generation, query budgets and safe results |
-| Application storage | SQLite | Conversations, saved reports, ownership and pending confirmations |
+| Application storage | SQLite | Conversation metadata, saved reports, ownership and pending confirmations |
 | Diagnostics | Redacted structured events | Correlated stage timings, failures, retries and query metadata |
 
 The model proposes analysis; application code decides what is authorized. A validated analytical plan is compiled dynamically into parameterized SQL. The supported plan grammar must cover the demonstration's comparisons, time series and multi-step analyses. Unsupported requests receive an explicit limitation or clarification.
@@ -49,12 +49,13 @@ The local user selector will demonstrate authorization behavior. It will not be 
 
 ## Development setup status
 
-No live API access or deployed infrastructure is required to review this foundation. `.env.example` lists the intended configuration without credentials. Executable installation instructions, pinned dependencies and an example run will be added with the implementation.
+No live API access or deployed infrastructure is required to review this foundation. `.env.example` lists the intended configuration without credentials. The selected framework baseline is `google-adk==2.11.0`, a stable ADK 2 release requiring Python 3.10 or later. It has not been installed or tested in this repository. Executable installation instructions, a dependency lock and an example run will be added with the implementation.
 
 Runtime databases, generated reports, traces, cloud credentials and local environment files stay outside version control.
 
 ## Primary technical references
 
-- [LangGraph overview](https://docs.langchain.com/oss/python/langgraph/overview)
-- [Google GenAI SDK](https://ai.google.dev/gemini-api/docs/libraries)
+- [Google ADK graph workflows](https://adk.dev/graphs/)
+- [Google ADK 2.11.0 package](https://pypi.org/project/google-adk/2.11.0/)
+- [Gemini documentation](https://ai.google.dev/gemini-api/docs)
 - [BigQuery query cost controls](https://docs.cloud.google.com/bigquery/docs/best-practices-costs)

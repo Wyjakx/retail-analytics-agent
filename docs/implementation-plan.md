@@ -2,7 +2,7 @@
 
 **Status: planning only. The prototype is not built, live services are unverified, and no deployment is claimed.**
 
-Build a local LangGraph + Gemini CLI using BigQuery, SQLite and Rich. Implement safety, report confirmation, resilience and observability. Keep Golden retrieval, preference learning, persona administration and production infrastructure design-only. See [architecture.md](architecture.md).
+Build a local Google ADK 2 + Gemini CLI using BigQuery, SQLite and Rich. Implement safety, report confirmation, resilience and observability. Keep Golden retrieval, preference learning, persona administration and production infrastructure design-only. See [architecture.md](architecture.md).
 
 ## Estimated sequence
 
@@ -10,9 +10,9 @@ Allow **6–12 hours of focused implementation**, assuming working credentials a
 
 | Elapsed time | Work and acceptance |
 | --- | --- |
-| 0–1 h | Package, settings, contracts and fixtures; clean installation, explicit missing-setting errors, no tracked secrets/runtime data |
+| 0–1 h | Package, settings, contracts and fixtures; verify ADK 2.11.0 workflow/session compatibility, clean installation, explicit missing-setting errors, no tracked secrets/runtime data |
 | 1–3 h | Typed plan, metric catalog, compiler and gateway; parameterized values, approved joins, product scope, dry run and byte limits |
-| 3–5 h | Gemini, LangGraph and Rich; end-to-end analysis and follow-up, validated model output, clear limitations |
+| 3–5 h | Gemini, ADK workflows and Rich; end-to-end analysis and follow-up, validated model output, clear limitations |
 | 5–6.5 h | Owned reports and confirmation; exact preview, actor-bound expiry, transactional deletion and cancellation |
 | 6.5–8 h | Correction, dependency failures and events; bounded attempts/deadlines and identifiable failure stages |
 | 8–10 h | Numerical and adversarial evaluation; fixture answers and authorization/PII/confirmation checks |
@@ -26,9 +26,9 @@ Define validated actor, plan, query, aggregate-result, report and pending-deleti
 
 Compile analytical operations dynamically from trusted metric definitions. Test mixed-product orders and composed comparisons before polishing chat output. No unrestricted SQL fallback. Structured model output helps shape validation but cannot enforce permissions. [Gemini structured outputs](https://ai.google.dev/gemini-api/docs/structured-output), [BigQuery parameters](https://docs.cloud.google.com/bigquery/docs/parameterized-queries).
 
-Use explicit graph stages and application-controlled tool dispatch. Preserve sanitized follow-up context; resolve current entitlements on every request. Bound correction and transient attempts under one deadline. [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview), [Google Gen AI SDK](https://googleapis.github.io/python-genai/).
+Use explicit ADK workflow stages and custom tools that enforce application policy on every invocation. Preserve sanitized follow-up context; resolve current entitlements on every request. Bound correction and transient attempts under one deadline. Pin `google-adk==2.11.0` and lock its compatible dependencies after the installation smoke test. [ADK graph workflows](https://adk.dev/graphs/), [released package](https://pypi.org/project/google-adk/2.11.0/).
 
-Build report ownership before deletion selection. Freeze IDs/versions at preview, then validate actor, expiry and state at commit. Log correlation metadata, not raw records. Enforce query-byte limits as well as result limits. [BigQuery cost controls](https://docs.cloud.google.com/bigquery/docs/best-practices-costs).
+Build report ownership before deletion selection. Freeze IDs/versions at preview, then validate actor, expiry and state at commit in the independent SQLite report service. Keep approval separate from ADK session persistence. Log correlation metadata, not raw records. Enforce query-byte limits as well as result limits. [BigQuery cost controls](https://docs.cloud.google.com/bigquery/docs/best-practices-costs).
 
 ## Acceptance checks
 

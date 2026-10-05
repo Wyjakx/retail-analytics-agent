@@ -2,9 +2,11 @@
 
 Status: agreed framework, proposed implementation details. No runtime has been built yet.
 
-## LangGraph with Gemini
+## Google ADK 2 with Gemini
 
-LangGraph with Gemini is the selected stack. Explicit nodes make analysis, validation, execution, repair and reporting easy to inspect. LangGraph can combine deterministic and model-driven steps without requiring the full LangChain stack. A small Google GenAI SDK adapter keeps provider configuration separate from business policy.
+Google ADK 2 with Gemini is the selected stack. Its graph workflows make analysis, validation, execution, repair and reporting explicit, combining Python functions and model-driven nodes. This fits the assignment's Gemini and BigQuery services. Custom tools keep authorization, SQL compilation and report operations in application code.
+
+As of 5 October 2026, the selected stable Python package is `google-adk==2.11.0`, published on 2 October and requiring Python 3.10 or later. ADK 2 is the framework generation; the prototype will use this stable patch/minor release rather than the initial 2.0.0 release. Installation, dependency resolution and workflow/session compatibility will be verified during implementation.
 
 The implementation explanation will describe the author's actual prior experience with the framework. No tenure, production scale or benchmark is asserted by this repository.
 
@@ -18,11 +20,13 @@ Unrestricted model-generated SQL is an alternative for broader analysis. It woul
 
 ## SQLite locally, managed storage in production
 
-SQLite keeps the local saved-report and confirmation demonstration reproducible. A repository interface allows a production relational database without changing orchestration. Add a separate graph checkpoint store only if recovery or pause/resume needs justify it.
+SQLite keeps the local saved-report and confirmation demonstration reproducible. A repository interface allows a production relational database without changing orchestration. ADK session state and the application report store have separate responsibilities; map sessions to trusted actor/conversation identities and test the selected persistence adapter.
+
+The deletion service owns preview, expiry, confirmation and atomic execution. ADK 2.11.0 adds workflow tool confirmation, but the confirmation documentation still marks the feature experimental and lists session-service limitations. The prototype will therefore use explicit CLI confirmation backed by application records. A SQLite memory service does not establish persistent-session confirmation compatibility.
 
 ## Credentials and model version
 
-Gemini credentials and BigQuery application-default credentials are local setup concerns, not repository contents. The exact supported Gemini model and dependency versions will be verified and pinned during implementation. A configurable model is preferable to embedding a changing provider alias into business logic.
+Gemini credentials and BigQuery application-default credentials are local setup concerns, not repository contents. The exact supported Gemini model and compatible dependencies will be verified and pinned during implementation alongside the selected ADK baseline. A configurable model is preferable to embedding a changing provider alias into business logic.
 
 ## Business assumptions to resolve
 
@@ -36,7 +40,9 @@ Gemini credentials and BigQuery application-default credentials are local setup 
 
 ## Sources
 
-- [LangGraph overview](https://docs.langchain.com/oss/python/langgraph/overview)
-- [Google GenAI SDK](https://ai.google.dev/gemini-api/docs/libraries)
+- [Google ADK graph workflows](https://adk.dev/graphs/)
+- [Google ADK 2.11.0 package](https://pypi.org/project/google-adk/2.11.0/)
+- [Google ADK 2.11.0 release notes](https://github.com/google/adk-python/releases/tag/v2.11.0)
+- [ADK confirmation support and limitations](https://adk.dev/tools-custom/confirmation/)
 - [BigQuery parameterized queries](https://docs.cloud.google.com/bigquery/docs/parameterized-queries)
 - [BigQuery cost controls](https://docs.cloud.google.com/bigquery/docs/best-practices-costs)
