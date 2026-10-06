@@ -6,7 +6,9 @@ The prototype answers retail analysis questions through a Python application. Ge
 
 `AdkTypedRunner` uses an ADK 2 workflow for each planning or reporting stage: a model node produces structured output, followed by Python validation. The stage has a fresh in-memory session and receives approved context from the application. Model calls, retries, output size and time are bounded. The model has no SQL, database or deletion tools.
 
-This keeps the orchestration close to Gemini while placing permissions and side effects in ordinary Python services that can be tested without a model. Conversational context comes from the application's sanitized history and previous plan. It does not implement learned user preferences. The ADK graph can be tested with a local fake model; actual Gemini access still needs a live run.
+This keeps the orchestration close to Gemini while placing permissions and side effects in ordinary Python services that can be tested without a model. Conversational context comes from the application's sanitized history and previous plan. It does not implement learned user preferences. The ADK graph is tested with a local fake model and has completed real Gemini planning/reporting calls; see the bounded live results in [evaluation](evaluation.md).
+
+The provider receives a JSON Schema copy with array length constraints removed to avoid a Gemini request rejection seen in the live test. The original Pydantic contract remains strict inside ADK and Python, so an oversized or empty array is rejected before it can drive an analysis. Unknown fields, approved enums, customer-reference patterns and numeric limits remain in the provider schema. Google's [structured-output limitations](https://ai.google.dev/gemini-api/docs/generate-content/structured-output#limitations) describe possible rejection of complex schemas; provider acceptance does not replace application validation.
 
 ## An analysis plan becomes SQL
 

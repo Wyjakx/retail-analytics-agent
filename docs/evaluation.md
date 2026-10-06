@@ -18,10 +18,19 @@ With that environment activated, the equivalent commands are `python -m pytest` 
 | Run | Evidence at this development stage |
 | --- | --- |
 | Saved-report service | 17 tests verified locally, including concurrent confirmations and rollback |
-| Complete test suite | 149 tests and 5 subtests passed on Python 3.12.14 / Windows, 6 October 2026 |
+| Complete test suite | 159 tests and 5 subtests passed on Python 3.12.10 / Windows, 6 October 2026 |
 | Static checks and dependencies | Ruff passes; `pip check` reports no broken requirements |
 | Scripted CLI demo | Verified: comparison, follow-up, save, pseudonymous customer ranking and monthly follow-up, PII refusal, preview, plain-yes refusal, cancel and explicit confirmation |
-| Live Gemini and BigQuery | Not validated in this document |
+| Live Gemini stages | Real ADK planning and reporting passed with `gemini-3.5-flash-lite` after the structured-output compatibility correction |
+| Live BigQuery calculations | Four table schemas and US location verified; all six metrics matched independent SQL for authorized products 1 and 2, explicitly all time |
+| Live application service | One complete question → plan → parameterized BigQuery query → Gemini report passed with two model calls and no report fallback |
+| Live CLI and broader scenarios | Normal ADC-based startup, live follow-ups, multi-query comparisons and failure scenarios remain unverified |
+
+The live calculations returned one approved product group and suppressed another with fewer than three purchasers. Each of the application and reference queries processed 13,418,810 bytes and recorded 41,943,040 billed bytes, within the 100 MB per-query cap. A separate product-1 query for 2025 returned no rows; that case was retained rather than silently broadening its period.
+
+For these live Python checks, an existing authenticated `gcloud` session supplied a short-lived credential directly to the test client. No credential was saved in source control. The normal CLI uses ADC; its consent step was still pending at the time of this record. These checks establish a working analytical path for one case, not broad natural-language accuracy or production readiness.
+
+Gemini initially rejected the legacy schema's `additional_properties` field, then rejected the full JSON schema with array bounds. The runner now sends JSON Schema with `minItems`/`maxItems` omitted only from the provider copy. ADK and application Pydantic validation retain every original array bound and reject excess queries, products and report findings. This behavior is covered by the installed SDK wire-format and ADK graph tests.
 
 ## Scenarios and expected results
 

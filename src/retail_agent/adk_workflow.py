@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import aclosing
+from copy import deepcopy
 import json
 import logging
 import time
@@ -13,6 +14,30 @@ from uuid import uuid4
 from pydantic import BaseModel, ValidationError
 
 Output = TypeVar("Output", bound=BaseModel)
+
+
+def _provider_json_schema(output_schema: type[BaseModel]) -> dict[str, Any]:
+    """Reduce Gemini's schema complexity; Python retains every array bound."""
+    schema = deepcopy(output_schema.model_json_schema())
+
+    def remove_array_bounds(node: dict[str, Any]) -> None:
+        node.pop("minItems", None)
+        node.pop("maxItems", None)
+        # Traverse schema locations only: property names, enum/default values
+        # and other user data may themselves contain names such as maxItems.
+        for keyword in ("$defs", "definitions", "properties", "patternProperties"):
+            for child in node.get(keyword, {}).values():
+                remove_array_bounds(child)
+        for keyword in ("items", "additionalProperties", "not", "if", "then", "else"):
+            child = node.get(keyword)
+            if isinstance(child, dict):
+                remove_array_bounds(child)
+        for keyword in ("anyOf", "allOf", "oneOf", "prefixItems"):
+            for child in node.get(keyword, []):
+                remove_array_bounds(child)
+
+    remove_array_bounds(schema)
+    return schema
 
 
 class ModelFailure(RuntimeError):
@@ -197,6 +222,13 @@ class AdkTypedRunner:
             # second check also protects against concurrent stage entry.
             if self._remaining_calls <= 0:
                 raise ModelFailure("model_call_budget_exceeded")
+            # ADK first installs output_schema as the legacy OpenAPI Schema.
+            # The SDK sends extra='forbid' as additional_properties there,
+            # which Gemini rejects. JSON Schema preserves additionalProperties
+            # on the supported wire path; Agent.output_schema still performs
+            # strict Pydantic validation when the response reaches the graph.
+            llm_request.config.response_schema = None
+            llm_request.config.response_json_schema = _provider_json_schema(output_schema)
             self._remaining_calls -= 1
             self.turn_model_calls += 1
             metadata["model_calls"] += 1

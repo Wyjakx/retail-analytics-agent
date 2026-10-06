@@ -2,7 +2,7 @@
 
 A conversational analytics assistant for retail executives, using Python, Google ADK 2, Gemini and BigQuery.
 
-**Status: runnable local prototype.** The offline CLI, analytical calculations, multi-turn follow-ups, saved reports and safety/error-handling boundaries are tested locally. Live Gemini and BigQuery adapters are implemented; cloud authentication and actual service calls have not been validated. The production architecture is a design proposal, not a deployment.
+**Status: runnable local prototype with a verified live service smoke test.** Gemini planning, BigQuery execution and Gemini report generation completed one real analysis; all six metrics matched independent SQL. The offline CLI, multi-turn follow-ups, saved reports and safety/error-handling boundaries are tested locally. Normal CLI startup with application-default credentials and broader live scenarios still need validation. The production architecture is a design proposal, not a deployment.
 
 ## Intended user experience
 
@@ -51,7 +51,7 @@ The client accepted predefined demo users and stable pseudonymous customer analy
 
 ## Install and run
 
-The application requires **Python 3.11 or later** and was verified on Python 3.12.14 on Windows. The selected ADK package is `google-adk==2.11.0`. Run these commands from the repository directory:
+The application requires **Python 3.11 or later** and was verified on Python 3.12 on Windows. The selected ADK package is `google-adk==2.11.0`. Run these commands from the repository directory:
 
 ```powershell
 python -m venv .venv
@@ -90,14 +90,14 @@ Natural-language deletion also accepts `Delete all reports mentioning Client X` 
 
 ## Live Gemini and BigQuery
 
-Copy `.env.example` to an ignored `.env` and set `GOOGLE_API_KEY`, `GEMINI_MODEL` and `GOOGLE_CLOUD_PROJECT`. Choose a Gemini model available to your account from the [official model list](https://ai.google.dev/gemini-api/docs/models). BigQuery also needs application-default credentials and query-job permission on the billing project. With the Google Cloud CLI installed, configure ADC yourself:
+Copy `.env.example` to an ignored `.env` and set `GOOGLE_API_KEY`, `GEMINI_MODEL` and `GOOGLE_CLOUD_PROJECT`. Choose a Gemini model available to your account from the [official model list](https://ai.google.dev/gemini-api/docs/models); the recorded smoke test used `gemini-3.5-flash-lite`. BigQuery also needs application-default credentials and query-job permission on the execution project. With the Google Cloud CLI installed, configure ADC yourself:
 
 ```text
 gcloud auth application-default login
 gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 ```
 
-See [BigQuery client authentication](https://docs.cloud.google.com/bigquery/docs/authentication) for supported alternatives. Keep all API keys and credential files outside Git.
+Complete the Google consent page, including its requested Google Cloud access. A normal `gcloud auth login` does not by itself configure ADC for the Python client. See [BigQuery client authentication](https://docs.cloud.google.com/bigquery/docs/authentication) for supported alternatives. Keep all API keys and credential files outside Git.
 
 ```powershell
 .\.venv\Scripts\retail-agent.exe --live --question "Show monthly revenue for product 1 in 2025"
