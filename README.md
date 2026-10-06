@@ -15,7 +15,7 @@ Report deletion follows a separate flow: identify the current user's matching re
 | Component | Choice | Responsibility |
 | --- | --- | --- |
 | Chat interface | Rich-based Python CLI | Conversation, tables, progress and confirmation previews |
-| Orchestration | Google ADK 2 | Typed workflows, explicit routes, bounded repair and tool execution |
+| Model orchestration | Google ADK 2 | Typed model-stage workflows, explicit routes and bounded model calls |
 | Model integration | Gemini through ADK | Analysis planning and grounded report generation |
 | Analytics gateway | BigQuery Python client | Trusted product scope, controlled SQL generation, query budgets and safe results |
 | Application storage | SQLite + in-memory conversation | Saved reports, ownership and pending confirmations; sanitized follow-up state |
@@ -117,6 +117,8 @@ Customer references are HMAC-derived from an internal customer ID, the actor and
 ```
 
 The tests use independently specified numerical expectations, fake BigQuery clients, a fake model inside the installed ADK runtime, and the actual CLI/SQLite flow. [Evaluation](docs/evaluation.md) records the verified results and the remaining live/semantic review.
+
+GitHub Actions runs the same pytest and Ruff checks on pushes and pull requests using Python 3.12 and the frozen dependencies. The workflow has read-only repository permissions and uses no Gemini or Google Cloud credentials. Database execution and saved-report operations remain Python application services; the ADK stages expose no database or deletion tools.
 
 Runtime data goes under `APP_DATA_DIR` (default `runtime`), separated into `demo`, `offline` and `live`. Each mode has `reports.sqlite3`, `events.jsonl` and, unless configured externally, `customer-pseudonym.key`. Conversations and raw-ID linkage are in memory; saved reports and pending-operation outcomes persist. Traces include correlation IDs and usage metadata, not raw questions, SQL, data rows, report bodies, pseudonyms or tokens. Runtime files, cloud credentials and local environment files are ignored by Git.
 

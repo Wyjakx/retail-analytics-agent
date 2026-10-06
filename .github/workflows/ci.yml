@@ -1,0 +1,44 @@
+name: CI
+
+"on":
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+
+      - name: Install frozen dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-lock.txt
+
+      - name: Install local package
+        run: python -m pip install --disable-pip-version-check --no-deps -e .
+
+      # Tests use synthetic fixtures and fake Gemini/BigQuery clients; no live services.
+      - name: Run tests without API credentials
+        env:
+          GOOGLE_API_KEY: ""
+          GEMINI_API_KEY: ""
+          GOOGLE_APPLICATION_CREDENTIALS: ""
+          GOOGLE_CLOUD_PROJECT: ""
+          GEMINI_MODEL: ""
+        run: python -m pytest -q
+
+      - name: Run Ruff
+        run: python -m ruff check src tests
