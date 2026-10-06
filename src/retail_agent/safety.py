@@ -115,6 +115,16 @@ def validate_report(report: Any, evidence: list[dict[str, Any]], plan: Any) -> N
     if any(reference not in allowed_refs for reference in CUSTOMER_LIKE.findall(content)):
         raise UnsafeOutput("An unverified customer reference was generated.")
     content = CUSTOMER_REFERENCE.sub("[CUSTOMER]", content)
+    # Approved citation IDs are opaque labels, not numerical business claims.
+    # Preserve validation of unknown IDs and longer strings sharing a prefix.
+    evidence_ids = {
+        item["evidence_id"] for item in evidence
+        if isinstance(item.get("evidence_id"), str) and item["evidence_id"]
+    }
+    for evidence_id in sorted(evidence_ids, key=len, reverse=True):
+        content = re.sub(
+            rf"(?<![\w-]){re.escape(evidence_id)}(?![\w-])", "[EVIDENCE]", content,
+        )
     allowed: set[float] = set()
 
     def add_number(value: Any) -> None:

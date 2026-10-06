@@ -288,11 +288,13 @@ class AnalyticsService:
             )
         if not evidence:
             return TurnResult("The query could not be executed after a bounded correction attempt.")
+        report_fallback = False
         try:
             with self.traces.stage("reporting", **common):
                 report = await self.model.report(question, evidence, METRIC_DEFINITIONS)
                 validate_report(report, evidence, plan)
         except (ModelFailure, ValidationError, UnsafeOutput):
+            report_fallback = True
             report = deterministic_report(evidence)
             validate_text(report.to_markdown())
             self.traces.event(stage="report_fallback", status="completed", reason="unverified_synthesis", **common)
@@ -328,7 +330,12 @@ class AnalyticsService:
             {"role": "assistant", "content": report.to_markdown()[:4000]},
         ])
         self.context.history = self.context.history[-6:]
-        return TurnResult("Analysis completed. Use /save TITLE to keep this report.",
+        message = (
+            "Analysis completed. The generated summary could not be verified; "
+            "this report shows the approved results. Use /save TITLE to keep it."
+            if report_fallback else "Analysis completed. Use /save TITLE to keep this report."
+        )
+        return TurnResult(message,
                           report=report, evidence=evidence, plan=plan)
 
     def _eligible_reports(self, scope: ActorScope, **filters: Any):

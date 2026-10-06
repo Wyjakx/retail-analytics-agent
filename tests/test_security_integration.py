@@ -12,6 +12,7 @@ from retail_agent.config import Settings
 from retail_agent.gateways import OfflineGateway, QueryOutcome
 from retail_agent.model import AnalystReport, Decision, OfflineModel
 from retail_agent.reports import ReportStore
+from retail_agent.safety import UnsafeOutput, validate_report
 from retail_agent.service import AnalyticsService, Conversation
 from retail_agent.telemetry import TraceRecorder
 
@@ -454,9 +455,96 @@ def test_unsafe_or_unsupported_report_uses_only_approved_evidence_fallback(app_f
     assert result.report.title == "Retail analysis"
     assert summary not in result.report.to_markdown()
     assert "revenue=900" in result.report.to_markdown()
+    assert "generated summary could not be verified" in result.message
     events = [json.loads(line) for line in app.traces.path.read_text(encoding="utf-8").splitlines()]
     assert any(event["stage"] == "report_fallback" for event in events)
     assert app.context.last_report == result.report
+
+
+def test_verified_digit_leading_citation_keeps_model_report_and_normal_message(app_factory):
+    class DigitLeadingGateway(RecordingGateway):
+        def execute(self, spec, scope, budget):
+            outcome = super().execute(spec, scope, budget)
+            return QueryOutcome(
+                outcome.rows, outcome.columns, "bq-7655e3b16480f29b",
+                outcome.statistics, outcome.simulated, outcome.suppressed_groups,
+            )
+
+    class CitationModel(RecordingModel):
+        async def report(self, question, evidence, metric_definitions):
+            await super().report(question, evidence, metric_definitions)
+            item = evidence[0]
+            return AnalystReport(
+                title="Verified revenue report", summary="Approved aggregate results.",
+                findings=[f"[{item['evidence_id']}] Revenue was {item['rows'][0]['revenue']}."],
+            )
+
+    app, _, _, _ = app_factory(model=CitationModel(), gateway=DigitLeadingGateway())
+    result = ask(app, "Revenue in 2025")
+    assert result.report.title == "Verified revenue report"
+    assert result.message == "Analysis completed. Use /save TITLE to keep this report."
+    events = [json.loads(line) for line in app.traces.path.read_text(encoding="utf-8").splitlines()]
+    assert not any(event["stage"] == "report_fallback" for event in events)
+
+
+DIGIT_LEADING_EVIDENCE_ID = "bq-7655e3b16480f29b"
+
+
+@pytest.fixture
+def approved_analysis():
+    evidence = [{
+        "evidence_id": DIGIT_LEADING_EVIDENCE_ID,
+        "rows": [{
+            "product": "1: Seven7 Women's Long Sleeve Stripe Belted Top",
+            "revenue": 147.0, "orders": 3, "purchasing_customers": 3,
+            "units": 3, "average_order_value": 49.0, "spend_per_customer": 49.0,
+        }],
+    }]
+    plan = AnalysisPlan(queries=[QuerySpec(
+        metrics=["revenue", "orders", "purchasing_customers", "units",
+                 "average_order_value", "spend_per_customer"],
+        dimensions=["product"], product_ids=[1, 2], limit=10,
+    )])
+    return evidence, plan
+
+
+def test_approved_digit_leading_evidence_id_is_an_opaque_citation(approved_analysis):
+    evidence, plan = approved_analysis
+    report = AnalystReport(
+        title="Product performance",
+        summary=f"Approved results [{DIGIT_LEADING_EVIDENCE_ID}].",
+        findings=[f"[{DIGIT_LEADING_EVIDENCE_ID}] Product 1 revenue was 147.0, "
+                  "from 3 orders and 3 purchasing customers. Average order value "
+                  "and spending per customer were 49.0."],
+    )
+    validate_report(report, evidence, plan)
+
+
+def test_citation_digits_do_not_authorize_a_business_claim(approved_analysis):
+    evidence, plan = approved_analysis
+    report = AnalystReport(
+        title="Invented amount",
+        summary=f"[{DIGIT_LEADING_EVIDENCE_ID}] Revenue was 7655.",
+    )
+    with pytest.raises(UnsafeOutput, match="unverified numerical"):
+        validate_report(report, evidence, plan)
+
+
+@pytest.mark.parametrize("citation", [
+    "bq-9898e3b16480f29b",
+    DIGIT_LEADING_EVIDENCE_ID + "0",
+    DIGIT_LEADING_EVIDENCE_ID + "-fake",
+    "prefix-" + DIGIT_LEADING_EVIDENCE_ID,
+])
+def test_unknown_or_extended_citation_retains_numerical_validation(
+    approved_analysis, citation,
+):
+    evidence, plan = approved_analysis
+    report = AnalystReport(
+        title="Unverified citation", summary=f"[{citation}] Revenue was 147.0.",
+    )
+    with pytest.raises(UnsafeOutput, match="unverified numerical"):
+        validate_report(report, evidence, plan)
 
 
 def test_forbidden_gateway_identifier_is_rejected_before_report_model(app_factory):

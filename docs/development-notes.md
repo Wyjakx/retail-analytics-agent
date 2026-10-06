@@ -44,6 +44,8 @@ This mode does not execute the generated SQL in BigQuery or assess Gemini's abil
 
 Invalid model plans can be corrected once. Empty or rejected queries permit one equivalent-plan retry, within the shared query budget; this rebuilds the same trusted SQL and is not general SQL repair. A compiler defect requires a code change. Partial comparisons are labeled incomplete and do not produce a new report. Failed model synthesis falls back to approved aggregate facts, with scope, period and definitions appended by the application. Trace-file I/O failures emit a diagnostic warning without changing committed report outcomes.
 
+The CLI explicitly indicates when it uses a fallback because the generated summary could not be verified. Report numeric checking excludes exact approved evidence citations: their hash digits identify evidence and are not numerical claims. It still checks nearby amounts and unrecognized citation text; it does not add hash digits to the set of supported business values.
+
 ## Provisional rules and assignment scope
 
 The client confirmed that predefined demo users with a config or access table are sufficient. The prototype uses configurable actor-to-product IDs, with a small example file. A selectable actor is not authentication. Production scopes arrive through a verified frontend JWT and are resolved to product IDs by trusted application policy.
