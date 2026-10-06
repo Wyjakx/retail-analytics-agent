@@ -3,6 +3,7 @@
 import asyncio
 from copy import deepcopy
 import json
+import sqlite3
 
 import pytest
 
@@ -227,6 +228,102 @@ def test_contact_values_are_redacted_before_question_and_history_reach_model(app
         assert raw not in history
     assert "[REDACTED_EMAIL]" in payloads
     assert "[REDACTED_PHONE]" in payloads
+
+
+@pytest.fixture(params=[
+    "GOOGLE_API_KEY", "GEMINI_API_KEY", "CUSTOMER_PSEUDONYM_KEY", "unconfigured_google_key",
+])
+def synthetic_secret(request, monkeypatch):
+    for name in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "CUSTOMER_PSEUDONYM_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    if request.param == "unconfigured_google_key":
+        # Construct an unmistakably synthetic value; test the final hyphen boundary.
+        return "AI" + "za" + "aB_" * 11 + "c-"
+    value = "b7" * 32 if request.param == "CUSTOMER_PSEUDONYM_KEY" else (
+        "local-private-" + "987654321012" + "-marker"
+    )
+    monkeypatch.setenv(request.param, value)
+    return value
+
+
+def assert_secret_absent_from_app(app, model, secret):
+    with sqlite3.connect(app.reports.path) as connection:
+        saved_state = "\n".join(connection.iterdump())
+    for content in (
+        json.dumps(model.inputs), json.dumps(app.context.history), saved_state,
+        app.traces.path.read_text(encoding="utf-8"),
+    ):
+        assert secret not in content
+
+
+def test_pasted_secret_is_redacted_before_model_history_and_saved_state(
+    app_factory, synthetic_secret,
+):
+    app, model, _, _ = app_factory(model=RecordingModel(decision=fixed_decision(1)))
+    baseline = ask(app, "Revenue all time")
+    result = ask(app, f"Revenue all time; credential ({synthetic_secret})")
+    followup = ask(app, "Revenue all time")
+    assert baseline.report and result.report and followup.report
+    assert result.evidence == baseline.evidence == followup.evidence
+    assert "[REDACTED_SECRET]" in json.dumps(model.inputs)
+    assert "[REDACTED_SECRET]" in json.dumps(app.context.history)
+    assert synthetic_secret not in result.report.to_markdown()
+    assert "Saved report" in ask(app, "/save Revenue summary").message
+    assert_secret_absent_from_app(app, model, synthetic_secret)
+
+
+def test_secret_in_model_report_uses_safe_fallback_before_display_and_save(
+    app_factory, synthetic_secret,
+):
+    model = RecordingModel(bad_report=AnalystReport(
+        title="Unverified report", summary=f"Credential ({synthetic_secret}).",
+    ))
+    app, _, _, _ = app_factory(model=model)
+    result = ask(app, "Revenue in 2025")
+    assert result.report and result.report.title == "Retail analysis"
+    assert synthetic_secret not in result.report.to_markdown()
+    assert "revenue=900" in result.report.to_markdown()
+    assert "Saved report" in ask(app, "/save Safe fallback").message
+    events = [json.loads(line) for line in app.traces.path.read_text().splitlines()]
+    assert any(event["stage"] == "report_fallback" for event in events)
+    assert_secret_absent_from_app(app, model, synthetic_secret)
+
+
+def test_secret_in_save_title_is_refused_without_persistence_or_model_call(
+    app_factory, synthetic_secret,
+):
+    app, model, _, _ = app_factory()
+    assert ask(app, "Revenue in 2025").report
+    calls = len(model.inputs)
+    result = ask(app, f"/save Summary ({synthetic_secret})")
+    assert "could not be completed safely" in result.message
+    assert synthetic_secret not in result.message
+    assert app.reports.list_reports("alice") == []
+    assert len(model.inputs) == calls
+    assert_secret_absent_from_app(app, model, synthetic_secret)
+
+
+def test_secret_in_evidence_is_refused_before_reporting_model(
+    app_factory, synthetic_secret,
+):
+    class CredentialGateway(RecordingGateway):
+        def execute(self, spec, scope, budget):
+            outcome = super().execute(spec, scope, budget)
+            rows = [{**row, "product": synthetic_secret} for row in outcome.rows]
+            return QueryOutcome(rows, outcome.columns, outcome.evidence_id, outcome.statistics, True)
+
+    decision = Decision(action="analysis", plan=AnalysisPlan(queries=[
+        QuerySpec(metrics=["revenue"], dimensions=["product"]),
+    ]))
+    app, model, _, _ = app_factory(
+        model=RecordingModel(decision=decision), gateway=CredentialGateway(),
+    )
+    result = ask(app, "Revenue by product all time")
+    assert result.report is None and result.evidence == []
+    assert not any(item["stage"] == "report" for item in model.inputs)
+    assert synthetic_secret not in result.message
+    assert app.context.history == []
+    assert_secret_absent_from_app(app, model, synthetic_secret)
 
 
 def test_report_commands_and_confirmation_tokens_never_reach_model(app_factory):

@@ -20,6 +20,14 @@ This is a deliberate restriction on expressiveness. It makes a requested calcula
 
 The present revenue definition includes nonnegative item prices for Complete or Shipped items and orders. An order containing both permitted and unauthorized products contributes only its permitted items. Average order value and spend per purchasing customer therefore describe the permitted product scope. They do not represent complete baskets or all customer spending. Dates use UTC and an exclusive end bound. Confirm these business definitions with the client before treating them as production rules.
 
+## Credentials and accidental disclosure
+
+API keys are loaded from the process environment or the ignored local `.env`; they are not embedded in source, prompts or reports. Google application-default credentials stay in the user's local Google configuration. SDK authentication sends credentials to the intended Google service, separately from the model's conversational input. Provider body logging is disabled, and application traces use a metadata allowlist.
+
+Questions are scrubbed for the configured `GOOGLE_API_KEY`, `GEMINI_API_KEY` and optional `CUSTOMER_PSEUDONYM_KEY` before the model or conversation history receives them. Standard Google API-key patterns are also masked when the key is not configured locally. Output validation refuses these secrets in evidence, reports and saved titles; an invalid model report falls back to approved facts. The checks deliberately use synthetic secrets in tests and do not read ADC files.
+
+The 6 October 2026 audit found no configured API key or Google credential value in the checked Git history, tracked files or runtime outputs. Sensitive local files are excluded from Git. The application does not encrypt `.env`, ADC files or SQLite itself, and the redaction rules do not cover every possible credential format. These are prototype boundaries, not a guarantee of zero disclosure risk.
+
 ## Reports require an independent confirmation
 
 `ReportStore` uses SQLite for report ownership, versions and pending deletion operations. A preview returns exact report titles, IDs and versions, plus an expiring token for the CLI. The model must never receive that token.

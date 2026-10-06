@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from typing import Any
 
@@ -14,6 +15,8 @@ class UnsafeOutput(ValueError):
 
 EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 PHONE = re.compile(r"(?<!\w)(?:\+\d{1,3}[\s.-]?)?(?:\d[\s.-]?){9,15}(?!\w)")
+GOOGLE_KEY = re.compile(r"(?<![A-Za-z0-9_-])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])")
+SECRET_ENV_NAMES = ("GOOGLE_API_KEY", "GEMINI_API_KEY", "CUSTOMER_PSEUDONYM_KEY")
 SENSITIVE_REQUEST = re.compile(
     r"\b(emails?|e-mails?|phones?|telephones?|téléphones?|adresses?|addresses?|postcodes?|zip codes?|"
     r"first.name|last.name|full.name|customer.id|user.id|client.id|nom des clients|"
@@ -41,9 +44,21 @@ RAW_CUSTOMER_IDENTIFIER = re.compile(
 )
 
 
+def _configured_secrets() -> tuple[str, ...]:
+    # Read only the relevant process environment; never read credential files.
+    # Longest first prevents overlapping values from leaving a secret suffix.
+    return tuple(sorted(
+        {value for name in SECRET_ENV_NAMES if len(value := os.environ.get(name, "")) >= 8},
+        key=len, reverse=True,
+    ))
+
+
 def sanitize_input(text: str) -> str:
     if len(text) > 4000:
         raise ValueError("Please keep questions under 4,000 characters.")
+    for secret in _configured_secrets():
+        text = text.replace(secret, "[REDACTED_SECRET]")
+    text = GOOGLE_KEY.sub("[REDACTED_SECRET]", text)
     text = EMAIL.sub("[REDACTED_EMAIL]", text)
     return PHONE.sub("[REDACTED_PHONE]", text)
 
@@ -55,6 +70,8 @@ def privacy_refusal(text: str) -> str | None:
 
 
 def validate_text(text: str) -> None:
+    if GOOGLE_KEY.search(text) or any(secret in text for secret in _configured_secrets()):
+        raise UnsafeOutput("Output contains credential-like content.")
     if EMAIL.search(text) or PHONE.search(text):
         raise UnsafeOutput("Output resembles personal contact information.")
     if len(text) > 30_000:

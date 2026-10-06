@@ -18,7 +18,7 @@ With that environment activated, the equivalent commands are `python -m pytest` 
 | Run | Evidence at this development stage |
 | --- | --- |
 | Saved-report service | 17 tests verified locally, including concurrent confirmations and rollback |
-| Complete test suite | 159 tests and 5 subtests passed on Python 3.12.10 / Windows, 6 October 2026 |
+| Complete test suite | 175 tests and 5 subtests passed on Python 3.12.10 / Windows, 6 October 2026 |
 | Static checks and dependencies | Ruff passes; `pip check` reports no broken requirements |
 | Scripted CLI demo | Verified: comparison, follow-up, save, pseudonymous customer ranking and monthly follow-up, PII refusal, preview, plain-yes refusal, cancel and explicit confirmation |
 | Live Gemini stages | Real ADK planning and reporting passed with `gemini-3.5-flash-lite` after the structured-output compatibility correction |
@@ -59,8 +59,9 @@ For customer spending in 2025, six customers each contribute 90 and six each con
 | Saved reports | Check actor/conversation/mention selection; preview exact targets; require a separate confirmation; verify cancel, expiry, wrong actor/token and changed versions. | SQLite service tests and CLI walkthrough |
 | Concurrent report actions | New reports survive an old preview. Overlapping or simultaneous confirmations cannot broaden deletion. A commit failure rolls back deletion and token consumption together. | Separate SQLite connections and forced transaction failures |
 | Correlated traces | Link request, conversation, stage, evidence/query, report and deletion operation IDs; record outcomes, timings, retries and usage. Raw prompts, rows, report bodies and confirmation tokens must be absent. | Trace assertions using distinctive sensitive test markers |
+| Accidentally pasted credentials | Mask configured API/pseudonym secrets and standard Google API-key patterns before model input/history. Reject credential-like evidence, model reports and saved titles. Verify absence from SQLite and traces. | 16 application regression cases using synthetic secrets; local boolean-only check of the configured API key |
 
-Numerical-token validation is a limited check: a number present in the evidence can still be attached to the wrong fact, or described with the wrong unit. Contact-pattern detectors also do not prove that every possible personal detail is recognized. The application reduces exposure through approved aggregate fields, keyed customer pseudonyms and withholding raw identities; reviewer checks cover the remaining semantic gaps. Pseudonyms remain linkable. Empty/rejected-query correction is an equivalent-plan retry, not arbitrary SQL repair; compiler defects require source changes.
+Numerical-token validation is a limited check: a number present in the evidence can still be attached to the wrong fact, or described with the wrong unit. Contact-pattern detectors also do not prove that every possible personal detail is recognized. Credential redaction covers the configured secrets and standard Google API-key syntax; it is not a detector for every provider, token type or transformed representation. The application reduces exposure through approved aggregate fields, keyed customer pseudonyms and withholding raw identities; reviewer checks cover the remaining semantic gaps. Pseudonyms remain linkable. Empty/rejected-query correction is an equivalent-plan retry, not arbitrary SQL repair; compiler defects require source changes.
 
 ## Human review and live validation
 
