@@ -24,11 +24,12 @@ With that environment activated, the equivalent commands are `python -m pytest` 
 | Live Gemini stages | Real ADK planning and reporting passed with `gemini-3.5-flash-lite` after the structured-output compatibility correction |
 | Live BigQuery calculations | Four table schemas and US location verified; all six metrics matched independent SQL for authorized products 1 and 2, explicitly all time |
 | Live application service | One complete question → plan → parameterized BigQuery query → Gemini report passed with two model calls and no report fallback |
-| Live CLI and broader scenarios | Normal ADC-based startup, live follow-ups, multi-query comparisons and failure scenarios remain unverified |
+| Live CLI | Normal ADC-based startup and the same six-metric all-time analysis passed with a Gemini report |
+| Broader live scenarios | Live follow-ups, multi-query comparisons and failure scenarios remain unverified |
 
 The live calculations returned one approved product group and suppressed another with fewer than three purchasers. Each of the application and reference queries processed 13,418,810 bytes and recorded 41,943,040 billed bytes, within the 100 MB per-query cap. A separate product-1 query for 2025 returned no rows; that case was retained rather than silently broadening its period.
 
-For these live Python checks, an existing authenticated `gcloud` session supplied a short-lived credential directly to the test client. No credential was saved in source control. The normal CLI uses ADC; its consent step was still pending at the time of this record. These checks establish a working analytical path for one case, not broad natural-language accuracy or production readiness.
+The initial live Python checks used a short-lived credential from an existing authenticated `gcloud` session, supplied directly to the test client. Google consent was then completed, ADC configured with the execution project's quota context, and the normal `retail-agent --live` CLI passed the same analysis. No credential was saved in source control. These checks establish a working analytical path for one case, not broad natural-language accuracy or production readiness.
 
 Gemini initially rejected the legacy schema's `additional_properties` field, then rejected the full JSON schema with array bounds. The runner now sends JSON Schema with `minItems`/`maxItems` omitted only from the provider copy. ADK and application Pydantic validation retain every original array bound and reject excess queries, products and report findings. This behavior is covered by the installed SDK wire-format and ADK graph tests.
 

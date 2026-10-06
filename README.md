@@ -2,7 +2,7 @@
 
 A conversational analytics assistant for retail executives, using Python, Google ADK 2, Gemini and BigQuery.
 
-**Status: runnable local prototype with a verified live service smoke test.** Gemini planning, BigQuery execution and Gemini report generation completed one real analysis; all six metrics matched independent SQL. The offline CLI, multi-turn follow-ups, saved reports and safety/error-handling boundaries are tested locally. Normal CLI startup with application-default credentials and broader live scenarios still need validation. The production architecture is a design proposal, not a deployment.
+**Status: runnable local prototype with a verified live CLI smoke test.** With application-default credentials, Gemini planning, BigQuery execution and Gemini report generation completed one real analysis; all six metrics matched independent SQL. The offline CLI, multi-turn follow-ups, saved reports and safety/error-handling boundaries are tested locally. Broader live scenarios still need validation. The production architecture is a design proposal, not a deployment.
 
 ## Intended user experience
 
