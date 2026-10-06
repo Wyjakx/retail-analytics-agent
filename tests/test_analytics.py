@@ -12,7 +12,8 @@ from retail_agent.analytics import (
     ActorScope, AnalysisPlan, BudgetExceeded, QuerySpec, QueryTimeout,
     SAFE_COLUMNS, SQLCompiler, SchemaViolation, ScopeViolation,
 )
-from retail_agent.gateways import BigQueryGateway, OfflineGateway, QueryBudget, seeded_data
+from retail_agent.gateways import BigQueryGateway, OfflineGateway, QueryBudget, QueryOutcome, seeded_data
+from retail_agent.pseudonyms import CustomerPseudonymizer
 
 
 def query(**overrides):
@@ -139,6 +140,9 @@ def test_compiler_applies_scope_in_cte_and_binds_untrusted_values():
     {"metrics": ["email"]}, {"dimensions": ["user_id"]}, {"sql": "SELECT * FROM users"},
     {"actor_id": "admin"}, {"product_ids": [True]}, {"limit": 51}, {"metrics": ["revenue", "revenue"]},
     {"start_date": "2025-02-01", "end_date": "2025-01-01"},
+    {"metrics": ["revenue"], "order_by": "orders"}, {"order_direction": "random"},
+    {"customer_refs": ["7"]}, {"customer_refs": ["cust_" + "A" * 32]},
+    {"customer_refs": ["cust_" + "a" * 32, "cust_" + "a" * 32]},
 ])
 def test_restricted_plan_shape(bad):
     with pytest.raises(ValidationError):
@@ -348,3 +352,148 @@ assert result.simulated and result.rows[0]['revenue'] == 900
 """
     completed = subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).parents[1], capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr
+
+
+def test_pseudonyms_are_key_stable_actor_bound_and_resolve_only_exposed_references():
+    first = CustomerPseudonymizer(b"a" * 32)
+    restarted = CustomerPseudonymizer(b"a" * 32)
+    reference = first.label("actor-a", 7)
+    assert reference.startswith("cust_") and len(reference) == 37
+    assert first.resolve("actor-a", [reference]) == (7,)
+    with pytest.raises(ScopeViolation, match="rerun the ranking"):
+        restarted.resolve("actor-a", [reference])
+    assert restarted.label("actor-a", 7) == reference
+    assert restarted.resolve("actor-a", [reference]) == (7,)
+    assert first.label("actor-b", 7) != reference
+    assert CustomerPseudonymizer(b"b" * 32).label("actor-a", 7) != reference
+    with pytest.raises(ScopeViolation, match="unavailable for this actor"):
+        first.resolve("actor-b", [reference])
+    with pytest.raises(ScopeViolation) as failure:
+        first.label("actor-a", 987654321.0)
+    assert "987654321" not in str(failure.value)
+    with pytest.raises(ValueError):
+        CustomerPseudonymizer(b"too-short")
+
+
+def test_customer_ranking_sorts_metrics_before_limit_with_numeric_ties():
+    pseudonymizer = CustomerPseudonymizer(b"a" * 32)
+    gateway = OfflineGateway(pseudonymizer=pseudonymizer)
+    spec = query(metrics=["revenue", "spend_per_customer"], dimensions=["customer"],
+                 end_date="2025-03-01", order_by="revenue", limit=3)
+    result = gateway.execute(spec, scope(), QueryBudget())
+    expected_labels = [pseudonymizer.label("demo-a", customer) for customer in (7, 8, 9)]
+    assert [row["customer"] for row in result.rows] == expected_labels
+    assert [row["revenue"] for row in result.rows] == [90, 90, 90]
+    assert [row["spend_per_customer"] for row in result.rows] == [90, 90, 90]
+    assert all(row["group_customer_count"] == 1 for row in result.rows)
+    assert "_customer_id" not in result.to_dict()["columns"]
+    assert all("_customer_id" not in row for row in result.to_dict()["rows"])
+    public = result.approve_for_model(spec)
+    assert len(public.rows) == 3 and public.suppressed_groups == 0
+    assert "group_customer_count" not in public.columns
+    assert all("group_customer_count" not in row for row in public.rows)
+    assert public.statistics["privacy_applied"] and public.statistics["pseudonymous_customers"]
+    assert public.approve_for_model(spec) is public
+
+
+def test_customer_ranking_ascending_and_mixed_product_revenue_isolation():
+    pseudonymizer = CustomerPseudonymizer(b"a" * 32)
+    gateway = OfflineGateway(pseudonymizer=pseudonymizer)
+    spec = query(metrics=["revenue"], dimensions=["customer"], order_by="revenue", limit=1)
+    permitted = gateway.execute(spec, scope(1), QueryBudget())
+    assert permitted.rows[0]["revenue"] == 30
+    assert permitted.rows[0]["customer"] == pseudonymizer.label("demo-a", 7)
+    # The $500 lamp in every mixed order never inflates the product-1 ranking.
+    broader = gateway.execute(spec, scope(1, 3), QueryBudget())
+    assert broader.rows[0]["revenue"] == 530
+    ascending = gateway.execute(spec.model_copy(update={"order_direction": "asc"}), scope(1), QueryBudget())
+    assert ascending.rows[0]["revenue"] == 20
+    assert ascending.rows[0]["customer"] == pseudonymizer.label("demo-a", 1)
+    segment = gateway.execute(query(metrics=["revenue"], dimensions=["state"], order_by="revenue", limit=1), scope(), QueryBudget())
+    assert segment.rows == [{"state": "Texas", "revenue": 180, "group_customer_count": 6}]
+
+
+def test_customer_followups_resolve_references_and_reapply_current_product_scope():
+    gateway = OfflineGateway(pseudonymizer=CustomerPseudonymizer(b"a" * 32))
+    ranked = gateway.execute(query(metrics=["revenue"], dimensions=["customer"], order_by="revenue", limit=1), scope(), QueryBudget())
+    reference = ranked.rows[0]["customer"]
+    spec = query(metrics=["revenue", "orders"], customer_refs=[reference], start_date="2025-02-01", end_date="2025-03-01")
+    result = gateway.execute(spec, scope(), QueryBudget()).approve_for_model(spec)
+    assert result.rows == [{"revenue": 60, "orders": 1}]
+    assert result.statistics["pseudonymous_customers"] is True
+    assert gateway.execute(spec, scope(2), QueryBudget()).rows == []
+    assert gateway.execute(spec, scope(3), QueryBudget()).rows[0]["revenue"] == 500
+    with pytest.raises(ScopeViolation):
+        gateway.execute(spec, ActorScope("other-actor", (1,)), QueryBudget())
+    # Limiting a ranking exposes no reference for omitted customers.
+    omitted = CustomerPseudonymizer(b"a" * 32).label("demo-a", 8)
+    with pytest.raises(ScopeViolation):
+        gateway.execute(query(customer_refs=[omitted]), scope(), QueryBudget())
+
+
+def test_unknown_customer_references_fail_before_any_metadata_or_query():
+    spec = query(customer_refs=["cust_" + "0" * 32])
+    for gateway in (OfflineGateway(), BigQueryGateway(client=FakeClient())):
+        budget = QueryBudget()
+        with pytest.raises(ScopeViolation, match="rerun the ranking"):
+            gateway.execute(spec, scope(), budget)
+        assert budget.queries_used == 0
+        if isinstance(gateway, BigQueryGateway):
+            assert gateway.client.metadata_calls == [] and gateway.client.query_calls == []
+    with pytest.raises(ScopeViolation, match="trusted resolution"):
+        SQLCompiler().compile(spec, scope())
+
+
+def test_compiler_uses_only_trusted_parameterized_customer_resolution_and_metric_sort():
+    spec = query(metrics=["revenue"], dimensions=["customer"], customer_refs=["cust_" + "a" * 32],
+                 order_by="revenue", limit=2)
+    compiled = SQLCompiler().compile(spec, scope(), customer_ids=(7,))
+    assert "oi.user_id IN UNNEST(@resolved_customers)" in compiled.sql
+    assert "oi.user_id AS _customer_id" in compiled.sql
+    assert "ORDER BY revenue DESC, _customer_id" in compiled.sql
+    assert compiled.sql.index("ORDER BY") < compiled.sql.index("LIMIT")
+    assert "cust_" not in compiled.sql
+    assert {p.name: p.value for p in compiled.parameters}["resolved_customers"] == (7,)
+    assert {p.name: p.value for p in compiled.parameters}["allowed_products"] == (1,)
+    for invalid in ((True,), (-1,), (7, 8)):
+        with pytest.raises(ScopeViolation):
+            SQLCompiler().compile(spec, scope(), customer_ids=invalid)
+    with pytest.raises(ScopeViolation):
+        SQLCompiler().compile(query(), scope(), customer_ids=(7,))
+
+
+def test_mocked_bigquery_transforms_raw_customer_ids_before_return_and_binds_followup():
+    pseudonymizer = CustomerPseudonymizer(b"a" * 32)
+    client = FakeClient(rows=[{"_customer_id": 7, "revenue": 30.0, "group_customer_count": 1}])
+    gateway = BigQueryGateway(client=client, pseudonymizer=pseudonymizer)
+    spec = query(metrics=["revenue"], dimensions=["customer"], order_by="revenue", limit=1)
+    ranked = gateway.execute(spec, scope(), QueryBudget())
+    reference = ranked.rows[0]["customer"]
+    assert ranked.columns == ["customer", "revenue", "group_customer_count"]
+    assert ranked.rows == [{"customer": reference, "revenue": 30, "group_customer_count": 1}]
+    assert reference == pseudonymizer.label("demo-a", 7)
+    assert "_customer_id" not in repr(ranked.to_dict())
+    assert len(ranked.approve_for_model(spec).rows) == 1
+    client.job = FakeJob([{"revenue": 60.0, "group_customer_count": 1}])
+    followup = query(metrics=["revenue"], customer_refs=[reference])
+    result = gateway.execute(followup, scope(), QueryBudget()).approve_for_model(followup)
+    assert result.rows == [{"revenue": 60}]
+    bound = {p.name: p for p in client.query_calls[-1][1]["job_config"].query_parameters}
+    assert bound["resolved_customers"].values == [7]
+    assert bound["allowed_products"].values == [1]
+    assert "cust_" not in client.query_calls[-1][0]
+
+
+def test_privacy_approval_keeps_segment_suppression_and_rejects_raw_customer_labels():
+    data = seeded_data()
+    data["users"][0]["state"] = "Sparse state"
+    spec = query(dimensions=["state"])
+    public = OfflineGateway(data).execute(spec, scope(), QueryBudget()).approve_for_model(spec)
+    assert public.suppressed_groups == 1 and len(public.rows) == 2
+    raw = QueryOutcome([{"customer": 7, "revenue": 30, "group_customer_count": 1}],
+                       ["customer", "revenue", "group_customer_count"], "test-evidence", {}, True)
+    with pytest.raises(SchemaViolation, match="opaque customer"):
+        raw.approve_for_model(query(metrics=["revenue"], dimensions=["customer"]))
+    client = FakeClient(rows=[{"_customer_id": "7", "revenue": 30, "group_customer_count": 1}])
+    with pytest.raises(SchemaViolation, match="invalid internal customer"):
+        BigQueryGateway(client=client).execute(query(metrics=["revenue"], dimensions=["customer"]), scope(), QueryBudget())

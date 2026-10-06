@@ -9,7 +9,7 @@ import pytest
 
 from retail_agent.adk_workflow import ModelFailure
 from retail_agent.analytics import AnalysisPlan, QuerySpec
-from retail_agent.config import ConfigurationError, Settings, resolve_scope
+from retail_agent.config import ConfigurationError, Settings, load_pseudonym_key, resolve_scope
 from retail_agent.gateways import OfflineGateway, QueryOutcome
 from retail_agent.model import Decision, OfflineModel
 from retail_agent.reports import ReportStore
@@ -165,6 +165,29 @@ def test_env_budgets_cannot_disable_required_privacy_threshold(monkeypatch):
         Settings.load(env_file=None)
 
 
+def test_local_customer_key_persists_and_keeps_modes_separate(tmp_path):
+    settings = Settings(data_dir=tmp_path / "offline")
+    key = load_pseudonym_key(settings)
+    assert len(key) == 32
+    assert load_pseudonym_key(settings) == key
+    assert load_pseudonym_key(replace(settings, data_dir=tmp_path / "live")) != key
+    (settings.data_dir / "customer-pseudonym.key").write_bytes(b"damaged")
+    with pytest.raises(ConfigurationError):
+        load_pseudonym_key(settings)
+
+
+def test_customer_key_environment_is_validated_without_secret_disclosure(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUSTOMER_PSEUDONYM_KEY", "ab" * 32)
+    settings = Settings.load(env_file=None)
+    assert load_pseudonym_key(replace(settings, data_dir=tmp_path)) == bytes.fromhex("ab" * 32)
+    assert settings.customer_pseudonym_key not in repr(settings)
+    assert not (tmp_path / "customer-pseudonym.key").exists()
+    monkeypatch.setenv("CUSTOMER_PSEUDONYM_KEY", "PRIVATE_INVALID_SECRET")
+    with pytest.raises(ConfigurationError) as exc:
+        Settings.load(env_file=None)
+    assert "PRIVATE_INVALID_SECRET" not in str(exc.value)
+
+
 def test_cli_demo_runs_in_a_fresh_directory_with_unicode_output(tmp_path):
     environment = {**os.environ, "APP_DATA_DIR": str(tmp_path / "state")}
     result = subprocess.run(
@@ -174,6 +197,9 @@ def test_cli_demo_runs_in_a_fresh_directory_with_unicode_output(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "OFFLINE: synthetic data" in result.stdout
     assert "spend_per_customer" in result.stdout
+    assert "Approved customer results" in result.stdout
+    assert "cust_" in result.stdout
+    assert "Break down cust_" in result.stdout
     assert "A plain yes cannot delete reports" in result.stdout
     assert "Deleted 1 selected report(s)" in result.stdout
     assert "Traceback" not in result.stderr

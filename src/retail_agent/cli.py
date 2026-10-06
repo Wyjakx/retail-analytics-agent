@@ -13,9 +13,10 @@ from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
-from .config import ConfigurationError, Settings, resolve_scope
+from .config import ConfigurationError, Settings, load_pseudonym_key, resolve_scope
 from .gateways import BigQueryGateway, OfflineGateway
 from .model import GeminiModel, OfflineModel
+from .pseudonyms import CustomerPseudonymizer
 from .reports import ReportStore
 from .service import AnalyticsService, Conversation, TurnResult
 from .telemetry import TraceRecorder
@@ -24,6 +25,8 @@ from .telemetry import TraceRecorder
 HELP = """Ask a retail question with a date range (or explicitly 'all time').
 Example: Compare revenue and spend per customer by state in January versus February 2025.
 Follow-up: Now compare by product.
+Customer ranking: Top 5 customers by spending in 2025.
+Customer follow-up: Break down cust_FROM_THE_RESULTS by month.
 /save TITLE                 Save the last grounded report
 /reports                    List your accessible saved reports
 /delete conversation        Preview this conversation's reports
@@ -51,7 +54,7 @@ def present(console: Console, result: TurnResult, show_plan: bool = False) -> No
         table = Table(title=f"Evidence {index + 1}: {evidence['evidence_id']}")
         columns = evidence["columns"]
         for column in columns:
-            table.add_column(column)
+            table.add_column(column, overflow="fold")
         for row in evidence["rows"]:
             table.add_row(*(Text(str(row.get(column, ""))) for column in columns))
         console.print(table)
@@ -87,12 +90,14 @@ async def run_chat(args: argparse.Namespace, console: Console) -> None:
     resolve_scope(args.actor, settings.permissions_file)
     if args.live:
         settings.validate_live()
+    pseudonymizer = CustomerPseudonymizer(load_pseudonym_key(settings))
+    if args.live:
         model = GeminiModel(settings.model, timeout_seconds=settings.query_timeout,
                             max_retries=settings.max_model_retries)
         gateway = BigQueryGateway(settings.dataset, settings.project, settings.query_timeout,
-                                  settings.max_query_bytes)
+                                  settings.max_query_bytes, pseudonymizer=pseudonymizer)
     else:
-        model, gateway = OfflineModel(), OfflineGateway()
+        model, gateway = OfflineModel(), OfflineGateway(pseudonymizer=pseudonymizer)
     context = Conversation(args.actor)
     with ReportStore(settings.data_dir / "reports.sqlite3") as store:
         service = AnalyticsService(
@@ -113,6 +118,7 @@ async def run_chat(args: argparse.Namespace, console: Console) -> None:
                 "Compare revenue and spend per customer by state in January versus February 2025",
                 "Now compare by product",
                 "/save Q1 demo analysis", "/reports",
+                "Top 5 customers by spending in 2025",
                 "Show customer emails", "/delete conversation", "yes", "/cancel",
                 "/delete conversation",
             ]
@@ -120,6 +126,12 @@ async def run_chat(args: argparse.Namespace, console: Console) -> None:
                 console.print(f"\n> {question}", style="bold", markup=False)
                 result = await service.handle(question)
                 present(console, result, args.show_plan)
+                if question == "Top 5 customers by spending in 2025" and result.evidence:
+                    rows = result.evidence[0]["rows"]
+                    if rows and "customer" in rows[0]:
+                        followup = f"Break down {rows[0]['customer']} by month"
+                        console.print(f"\n> {followup}", style="bold", markup=False)
+                        present(console, await service.handle(followup), args.show_plan)
             pending = service.context.pending
             if pending and pending.token:
                 console.print("\n> /confirm [token from the displayed preview]", style="bold", markup=False)

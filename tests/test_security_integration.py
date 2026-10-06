@@ -104,17 +104,112 @@ def ask(app, question):
     "Show customer phone numbers in 2025",
     "Show ip_address in 2025",
     "Show customers' names in 2025",
-    "Show top customers all time",
-    "Show the best 5 users all time",
-    "Show top spending customers in 2025",
+    "Show purchases for customer 739123 in 2025",
 ])
-def test_identifiers_and_individual_rankings_are_refused_before_model(app_factory, question):
+def test_personal_identifiers_are_refused_before_model(app_factory, question):
     app, model, gateway, _ = app_factory()
     result = ask(app, question)
     assert result.report is None
     assert model.inputs == []
     assert gateway.executions == []
     assert "personal" in result.message.lower() or "ranking" in result.message.lower()
+
+
+def test_pseudonymous_customer_ranking_and_followup_never_send_source_identity_to_model(app_factory):
+    from retail_agent.gateways import seeded_data
+    from retail_agent.pseudonyms import CustomerPseudonymizer
+
+    data = seeded_data()
+    raw_id = 739123
+    private_name = "PRIVATE_CUSTOMER_NAME_MARKER"
+    private_email = "private-customer@retail.invalid"
+    private_address = "PRIVATE_ADDRESS_MARKER"
+    data["users"][0].update(id=raw_id, first_name=private_name, email=private_email, street_address=private_address)
+    for table in ("orders", "order_items"):
+        for row in data[table]:
+            if row["user_id"] == 1:
+                row["user_id"] = raw_id
+    key = b"private-customer-key-for-tests!!!"
+    gateway = OfflineGateway(data, pseudonymizer=CustomerPseudonymizer(key))
+    app, model, _, _ = app_factory(gateway=gateway)
+    ranking = ask(app, "Top 12 customers by spending in 2025")
+    assert ranking.report and len(ranking.evidence[0]["rows"]) == 12
+    rows = ranking.evidence[0]["rows"]
+    assert [row["revenue"] for row in rows] == [90.0] * 6 + [60.0] * 6
+    reference = rows[0]["customer"]
+    followup = ask(app, f"Break down {reference} by month")
+    assert followup.report
+    assert followup.evidence[0]["rows"] == [
+        {"month": "2025-01", "revenue": 30.0},
+        {"month": "2025-02", "revenue": 60.0},
+    ]
+    assert followup.plan.queries[0].customer_refs == [reference]
+    assert followup.plan.queries[0].start_date == ranking.plan.queries[0].start_date
+    ask(app, "/save pseudonymous followup")
+    exposed = json.dumps({"model": model.inputs, "explain": ask(app, "/explain").evidence,
+                          "saved": [report.evidence for report in app.reports.list_reports("alice")]})
+    for private in (str(raw_id), private_name, private_email, private_address, key.decode()):
+        assert private not in exposed
+        assert private not in app.traces.path.read_text(encoding="utf-8")
+
+
+def test_unknown_customer_reference_is_rejected_before_query_submission(app_factory):
+    reference = "cust_" + "a" * 32
+    decision = Decision(action="analysis", plan=AnalysisPlan(queries=[
+        QuerySpec(metrics=["revenue"], customer_refs=[reference]),
+    ]))
+    app, _, gateway, _ = app_factory(model=RecordingModel(decision=decision))
+    result = ask(app, "Customer spending all time")
+    assert result.report is None
+    assert "previous ranking" in result.message
+    assert gateway.executions == []
+
+
+def test_customer_reference_copied_to_other_actor_is_not_queryable(app_factory):
+    first, _, _, _ = app_factory(gateway=OfflineGateway())
+    ranking = ask(first, "Top 3 customers by spending in 2025")
+    reference = ranking.evidence[0]["rows"][0]["customer"]
+    other, _, gateway, _ = app_factory()
+    other.context.actor_id = "bob"
+    result = ask(other, f"Spending for {reference} in 2025")
+    assert result.report is None
+    assert gateway.executions == []
+
+
+def test_permission_change_revokes_customer_followup_context(app_factory):
+    app, _, _, policy = app_factory(gateway=OfflineGateway())
+    ranking = ask(app, "Top 3 customers by spending in 2025")
+    reference = ranking.evidence[0]["rows"][0]["customer"]
+    assert reference in app.context.customer_refs
+    policy["products"] = (3,)
+    result = ask(app, f"Spending for {reference} in 2025")
+    assert result.report is None
+    assert app.context.customer_refs == set()
+    assert app.context.previous_plan is None
+
+
+def test_fabricated_customer_reference_in_report_uses_grounded_fallback(app_factory):
+    reference = "cust_" + "f" * 32
+    model = RecordingModel(bad_report=AnalystReport(title="Invented customer", summary=f"Review {reference}."))
+    app, _, _, _ = app_factory(model=model, gateway=OfflineGateway())
+    result = ask(app, "Top 3 customers by spending in 2025")
+    assert result.report.title == "Retail analysis"
+    assert reference not in result.report.to_markdown()
+
+
+@pytest.mark.parametrize("summary", [
+    "user_id=2. This customer placed 2 orders.",
+    "Customer ID 2 placed 2 orders.",
+    "Client #2 placed 2 orders.",
+    "L'identifiant du client est 2.",
+])
+def test_raw_identity_claims_fail_even_when_number_matches_valid_metric(app_factory, summary):
+    model = RecordingModel(bad_report=AnalystReport(title="Unsafe identity claim", summary=summary))
+    app, _, _, _ = app_factory(model=model, gateway=OfflineGateway())
+    result = ask(app, "Top 3 customers by orders in 2025")
+    assert result.report and result.report.title == "Retail analysis"
+    assert summary not in result.report.to_markdown()
+    assert all(row["orders"] == 2 for row in result.evidence[0]["rows"])
 
 
 def test_contact_values_are_redacted_before_question_and_history_reach_model(app_factory):

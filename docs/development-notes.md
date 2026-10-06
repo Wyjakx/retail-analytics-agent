@@ -10,7 +10,7 @@ This keeps the orchestration close to Gemini while placing permissions and side 
 
 ## An analysis plan becomes SQL
 
-The chosen contract is `AnalysisPlan`, containing up to three `QuerySpec` operations. Each operation combines approved metrics, dimensions, date bounds and filters. The current catalog supports revenue, orders, purchasing customers, units, average order value and spend per customer, grouped by month, state, country, category or product.
+The chosen contract is `AnalysisPlan`, containing up to three `QuerySpec` operations. Each operation combines approved metrics, dimensions, date bounds and filters. The current catalog supports revenue, orders, purchasing customers, units, average order value and spend per customer, grouped by month, state, country, category, product or pseudonymous customer. A selected metric can order the results before the row limit is applied.
 
 Python validates the plan, resolves product permissions and compiles SQL against four fixed join paths. Table names, column expressions and joins come from code. Filter values become query parameters. Unsupported operations need clarification or an explicit catalog extension; the application has no raw model-SQL fallback.
 
@@ -36,8 +36,12 @@ Invalid model plans can be corrected once. Empty or rejected queries permit one 
 
 ## Provisional rules and assignment scope
 
-The supplied dataset contains no client-approved mapping from executives to products. Demo actors and configurable product IDs demonstrate authorization while that mapping is clarified. A selectable actor is not authentication. Production needs a trusted identity-to-entitlement source and restricted analytics views or columns.
+The client confirmed that predefined demo users with a config or access table are sufficient. The prototype uses configurable actor-to-product IDs, with a small example file. A selectable actor is not authentication. Production scopes arrive through a verified frontend JWT and are resolved to product IDs by trusted application policy.
 
-Individual customer rankings remain disabled pending the client's privacy decision. Aggregate segments, spend per purchasing customer and customer counts are available within the permitted product scope. Minimum-group suppression and input/output checks add protection, but repeated-query inference and semantic report accuracy need further controls and evaluation.
+The client also approved stable pseudonymous individual customers for rankings and follow-up questions, while excluding names, emails and addresses from both model context and output. The gateway groups using internal IDs, replaces those IDs with actor-scoped HMAC labels in Python, and returns only approved result fields. A secret key prevents dictionary lookup of predictable numeric IDs; including the actor avoids sharing the same label between demo users. Product permissions are applied before aggregation and ranking.
+
+The gateway keeps label-to-ID linkage only in process memory. The application admits follow-up references only after a successful ranking in the current conversation. Unknown or cross-actor labels cannot fall back to an unfiltered query. A permission change clears conversation references; the new query still applies current product permissions. The local key persists separately from source control, so rerunning a ranking recreates the same labels. Restart and `/new` require a new ranking to establish usable context. Production would store the key in Secret Manager and use a restricted linkage service if long-lived follow-ups are required.
+
+Customer-level queries are deliberately exempt from the minimum-customer threshold: suppressing every single-customer row would defeat the explicitly approved capability. The minimum still applies to ordinary aggregate segments. Pseudonymization is not anonymization; repeated-query inference and semantic report accuracy require further production controls and evaluation.
 
 Golden Question → SQL → Analyst Report retrieval, preference learning, system learning and nondeveloper persona updates are design deliverables for this assignment. Their proposed storage, review and update flows are documented in the architecture; the prototype does not implement them. Charts, email and web tools are also future extensions. The prototype work concentrates on the required CLI, safety, strict report confirmation, bounded error handling and redacted observability.

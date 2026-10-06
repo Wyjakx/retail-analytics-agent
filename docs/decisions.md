@@ -28,13 +28,18 @@ The deletion service owns preview, expiry, confirmation and atomic execution. AD
 
 Gemini credentials and BigQuery application-default credentials are local setup concerns, not repository contents. Dependencies are pinned; `GEMINI_MODEL` is required explicitly in live mode so the operator chooses an available model. The chosen model and account access still need a live check. A configurable model avoids embedding a changing provider alias into business logic.
 
-## Business assumptions to resolve
+## Client clarification
 
-- Demo user-to-product entitlements will be explicitly seeded unless a mapping is supplied. They demonstrate access rules, not login security.
+The response received on 6 October 2026 confirms two prototype choices:
+
+- The client accepted predefined demo users with a config file or access table. The prototype's explicit actor-to-product mapping is sufficient; production scopes would arrive through a verified frontend JWT.
+- The client accepted stable pseudonymous customer labels for individual rankings and multi-turn follow-ups. Python generates actor-scoped HMAC references and keeps raw linkage private. Names, emails, addresses and raw personal identifiers are excluded from model input and outputs. Aggregate segments remain supported.
+
+## Remaining business assumptions
+
 - Revenue calculations need documented order status, refund/cancellation handling, currency and time zone semantics.
 - Customer inactivity can be measured from transaction history. It must not be labeled subscription churn without an agreed definition.
 - Explanations of performance differences describe observed contributing factors; they do not establish causation from transactions alone.
-- Customer-level analytics require a privacy-preserving output contract. Names, emails, addresses and raw personal identifiers are excluded.
 - The golden corpus is theoretical and its workflow is design-only for the prototype.
 - Query byte budgets, overall turn budgets and retry limits need separate enforcement. A row LIMIT alone does not cap scanned bytes.
 

@@ -8,12 +8,15 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
+import re
+import secrets
 import threading
 import time
 from typing import Any
 from uuid import uuid4
 
 from .analytics import ActorScope, BudgetExceeded, QuerySpec, QueryTimeout, SAFE_COLUMNS, SQLCompiler, SchemaViolation, permitted_products
+from .pseudonyms import CustomerPseudonymizer
 
 
 @dataclass
@@ -95,6 +98,32 @@ class QueryOutcome:
     simulated: bool
     suppressed_groups: int = 0
 
+    def approve_for_model(self, spec: QuerySpec, min_customers: int = 3) -> QueryOutcome:
+        """Apply the explicit customer-reference policy or normal segment suppression."""
+        spec = QuerySpec.model_validate(spec.model_dump())
+        if "customer" not in spec.dimensions and spec.customer_refs is None:
+            return self.suppress_small_groups(min_customers)
+        if min_customers < 1:
+            raise ValueError("A positive customer threshold is required.")
+        if "group_customer_count" not in self.columns:
+            if self.statistics.get("privacy_applied") and self.statistics.get("pseudonymous_customers"):
+                return self
+            raise SchemaViolation("Aggregate customer counts are required for privacy approval.")
+        retained = []
+        for row in self.rows:
+            count = row.get("group_customer_count")
+            if type(count) is not int or count < 0:
+                raise SchemaViolation("Invalid aggregate customer count.")
+            if "customer" in spec.dimensions and (not isinstance(row.get("customer"), str)
+                                                  or not re.fullmatch(r"cust_[0-9a-f]{32}", row["customer"])):
+                raise SchemaViolation("Customer statistics require opaque customer references.")
+            retained.append({key: value for key, value in row.items() if key != "group_customer_count"})
+        return QueryOutcome(
+            retained, [key for key in self.columns if key != "group_customer_count"], self.evidence_id,
+            {**self.statistics, "privacy_applied": True, "pseudonymous_customers": True,
+             "privacy_mode": "pseudonymous_customer"}, self.simulated, self.suppressed_groups,
+        )
+
     def suppress_small_groups(self, min_customers: int = 3) -> QueryOutcome:
         if min_customers < 1:
             raise ValueError("A positive customer threshold is required.")
@@ -131,10 +160,26 @@ def _columns(spec: QuerySpec) -> list[str]:
     return list(spec.dimensions) + list(spec.metrics) + ["group_customer_count"]
 
 
+def _public_customer_rows(rows: list[dict[str, Any]], scope: ActorScope,
+                          pseudonymizer: CustomerPseudonymizer) -> list[dict[str, Any]]:
+    """Transform trusted internal IDs before the gateway returns any rows."""
+    if any("_customer_id" in row and (type(row["_customer_id"]) is not int or row["_customer_id"] <= 0)
+           for row in rows):
+        raise SchemaViolation("The query returned an invalid internal customer dimension.")
+    public = []
+    for row in rows:
+        safe = dict(row)
+        if "_customer_id" in safe:
+            safe["customer"] = pseudonymizer.label(scope.actor_id, safe.pop("_customer_id"))
+        public.append(safe)
+    return public
+
+
 class BigQueryGateway:
     def __init__(self, dataset: str = "bigquery-public-data.thelook_ecommerce", billing_project: str | None = None,
                  timeout_seconds: float = 30, maximum_bytes_billed: int = 100_000_000,
-                 client: Any = None, location: str | None = None) -> None:
+                 client: Any = None, location: str | None = None,
+                 pseudonymizer: CustomerPseudonymizer | None = None) -> None:
         if timeout_seconds <= 0 or maximum_bytes_billed <= 0:
             raise ValueError("Timeout and per-query byte limit must be positive.")
         self.compiler = SQLCompiler(dataset)
@@ -145,6 +190,7 @@ class BigQueryGateway:
         self.location = location
         self._schema_checked = False
         self.last_metadata: dict[str, Any] = {}
+        self.pseudonymizer = pseudonymizer if pseudonymizer is not None else CustomerPseudonymizer(secrets.token_bytes(32))
 
     def schema_catalog(self) -> dict[str, list[str]]:
         return {name: list(columns) for name, columns in SAFE_COLUMNS.items()}
@@ -194,7 +240,10 @@ class BigQueryGateway:
         QueryBudget._cancel_job(job)
 
     def _execute(self, spec: QuerySpec, scope: ActorScope, budget: QueryBudget) -> QueryOutcome:
-        compiled = self.compiler.compile(spec, scope)
+        spec = QuerySpec.model_validate(spec.model_dump())
+        permitted_products(spec, scope)
+        customer_ids = self.pseudonymizer.resolve(scope.actor_id, spec.customer_refs) if spec.customer_refs else None
+        compiled = self.compiler.compile(spec, scope, customer_ids=customer_ids)
         budget.begin_query()
         self.last_metadata["stage"] = "schema_validation"
         self.validate_schema(budget)
@@ -243,7 +292,7 @@ class BigQueryGateway:
         finally:
             budget.finish_job()
         self.last_metadata["stage"] = "result_validation"
-        allowed = _columns(spec)
+        allowed = ["_customer_id" if name == "customer" else name for name in _columns(spec)]
         if {column.name for column in result.schema} != set(allowed):
             raise SchemaViolation("The query returned an unexpected result schema.")
         rows = []
@@ -258,8 +307,10 @@ class BigQueryGateway:
         billed = int(job.total_bytes_billed or 0)
         self.last_metadata.update(bytes_processed=int(job.total_bytes_processed or 0), bytes_billed=billed)
         budget.reconcile_bytes(estimated, billed)
+        budget.check_active()
+        public_rows = _public_customer_rows(rows, scope, self.pseudonymizer)
         self.last_metadata.update(stage="complete", status="succeeded")
-        return QueryOutcome(rows, allowed, _evidence(spec, scope, "bq"),
+        return QueryOutcome(public_rows, _columns(spec), _evidence(spec, scope, "bq"),
                             {"job_id": job.job_id, "estimated_bytes": estimated, "bytes_processed": int(job.total_bytes_processed or 0),
                              "bytes_billed": billed, "source": "bigquery", "reporting_timezone": "UTC"}, False)
 
@@ -284,7 +335,9 @@ def seeded_data() -> dict[str, list[dict[str, Any]]]:
 
 
 class OfflineGateway:
-    def __init__(self, data: dict[str, list[dict[str, Any]]] | None = None) -> None:
+    def __init__(self, data: dict[str, list[dict[str, Any]]] | None = None,
+                 pseudonymizer: CustomerPseudonymizer | None = None) -> None:
+        self.pseudonymizer = pseudonymizer if pseudonymizer is not None else CustomerPseudonymizer(secrets.token_bytes(32))
         self.data = deepcopy(seeded_data() if data is None else data)
         for table, required in SAFE_COLUMNS.items():
             if table not in self.data or any(not set(required).issubset(row) for row in self.data[table]):
@@ -299,17 +352,20 @@ class OfflineGateway:
     def execute(self, spec: QuerySpec, scope: ActorScope, budget: QueryBudget) -> QueryOutcome:
         spec = QuerySpec.model_validate(spec.model_dump())
         products = set(permitted_products(spec, scope))
+        customer_ids = set(self.pseudonymizer.resolve(scope.actor_id, spec.customer_refs)) if spec.customer_refs else None
         budget.begin_query()
         orders = {row["order_id"]: row for row in self.data["orders"]}
         users = {row["id"]: row for row in self.data["users"]}
         catalog = {row["id"]: row for row in self.data["products"]}
-        groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+        groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
         for item in self.data["order_items"]:
             budget.check_active()
             order, user, product = orders.get(item["order_id"]), users.get(item["user_id"]), catalog.get(item["product_id"])
             if not order or not user or not product or order["user_id"] != item["user_id"]:
                 continue
             if item["product_id"] not in products or item["status"] not in ("Complete", "Shipped") or order["status"] not in ("Complete", "Shipped"):
+                continue
+            if customer_ids is not None and item["user_id"] not in customer_ids:
                 continue
             price = Decimal(str(item["sale_price"]))
             if price < 0:
@@ -321,13 +377,15 @@ class OfflineGateway:
             if spec.start_date is not None and not spec.start_date <= day < spec.end_date:
                 continue
             labels = {"month": day.strftime("%Y-%m"), "state": user["state"] or "Unknown", "country": user["country"] or "Unknown",
-                      "category": product["category"] or "Unknown", "product": f"{product['id']}: {product['name']}"}
+                      "category": product["category"] or "Unknown", "product": f"{product['id']}: {product['name']}",
+                      "customer": item["user_id"]}
             if any(getattr(spec, field_name) is not None and labels[label] not in getattr(spec, field_name)
                    for field_name, label in [("states", "state"), ("countries", "country"), ("categories", "category")]):
                 continue
             groups.setdefault(tuple(labels[name] for name in spec.dimensions), []).append(item)
         rows = []
-        for labels, items in sorted(groups.items())[:spec.limit]:
+        dimension_aliases = ["_customer_id" if name == "customer" else name for name in spec.dimensions]
+        for labels, items in sorted(groups.items()):
             revenue = sum((Decimal(str(item["sale_price"])) for item in items), Decimal(0))
             order_count = len({item["order_id"] for item in items})
             customer_count = len({item["user_id"] for item in items})
@@ -335,7 +393,12 @@ class OfflineGateway:
                 return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
             values = {"revenue": money(revenue), "orders": order_count, "purchasing_customers": customer_count, "units": len(items),
                       "average_order_value": money(revenue / order_count), "spend_per_customer": money(revenue / customer_count)}
-            rows.append({**dict(zip(spec.dimensions, labels)), **{metric: values[metric] for metric in spec.metrics}, "group_customer_count": customer_count})
-        return QueryOutcome(rows, _columns(spec), _evidence(spec, scope, "fixture"),
+            rows.append({**dict(zip(dimension_aliases, labels)), **{metric: values[metric] for metric in spec.metrics}, "group_customer_count": customer_count})
+        # Stable sorting preserves ascending dimension ties, including numeric customer IDs.
+        if spec.order_by:
+            rows.sort(key=lambda row: row[spec.order_by], reverse=spec.order_direction == "desc")
+        budget.check_active()
+        public_rows = _public_customer_rows(rows[:spec.limit], scope, self.pseudonymizer)
+        return QueryOutcome(public_rows, _columns(spec), _evidence(spec, scope, "fixture"),
                             {"source": "synthetic_fixture", "estimated_bytes": 0, "bytes_processed": 0, "bytes_billed": 0,
                              "reporting_timezone": "UTC", "fixture_period": "2025-01 through 2025-02"}, True)

@@ -1,6 +1,6 @@
 # Proposed implementation plan
 
-**Status: the first local prototype is implemented and offline-tested. This sequence records the build scope; remaining work is live validation, client clarifications and human report/UX review. No deployment is claimed.**
+**Status: the local prototype is implemented and offline-tested. The client accepted demo permissions and pseudonymous customer analyses. Remaining work is live validation, business metric definitions and human report/UX review. No deployment is claimed.**
 
 Build a local Google ADK 2 + Gemini CLI using BigQuery, SQLite and Rich. Implement safety, report confirmation, resilience and observability. Keep Golden retrieval, preference learning, persona administration and production infrastructure design-only. See [architecture.md](architecture.md).
 
@@ -35,7 +35,7 @@ Build report ownership before deletion selection. Freeze IDs/versions at preview
 - Known-answer aggregates, date/status handling and ratios match fixtures without join double-counting.
 - A multi-step cohort comparison and follow-up use executed evidence rather than fixed prompt matching.
 - Two actors see different products; mixed orders, session reuse and entitlement changes preserve isolation.
-- Identifier requests and injected policy changes cannot expose PII or change access. Customer-ranking pseudonyms require an explicit privacy decision.
+- Identifier requests and injected policy changes cannot expose PII or change access. Customer rankings and follow-ups use stable actor-scoped pseudonyms under the client's explicit privacy decision.
 - Deletion handles cancel, expiry, wrong actor, replay, changed targets and reports created after preview.
 - Syntax errors, empty results and provider failures stop or correct safely within budgets; permission failures never broaden scope.
 - Traces link messages to failed stages/jobs without publishing prompts, credentials or source rows.

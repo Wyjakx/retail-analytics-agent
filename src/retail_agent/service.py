@@ -39,6 +39,7 @@ class Conversation:
     scope_snapshot: tuple[int, ...] = ()
     pending: PendingDeletion | None = field(default=None, repr=False)
     confirmation_tokens: set[str] = field(default_factory=set, repr=False)
+    customer_refs: set[str] = field(default_factory=set, repr=False)
 
 
 @dataclass
@@ -78,6 +79,7 @@ class AnalyticsService:
             self.context.last_report = None
             self.context.last_evidence.clear()
             self.context.last_products = ()
+            self.context.customer_refs.clear()
             pending = self.context.pending
             self.context.pending = None
             if pending and pending.operation_id:
@@ -159,8 +161,10 @@ class AnalyticsService:
             question = question.replace(token, "[REDACTED_CONFIRMATION]")
         catalog = {
             "tables": self.gateway.schema_catalog(), "metrics": METRIC_DEFINITIONS,
-            "dimensions": ["month", "state", "country", "category", "product"],
+            "dimensions": ["month", "state", "country", "category", "product", "customer"],
             "allowed_product_ids": list(scope.allowed_product_ids),
+            "allowed_customer_refs": sorted(self.context.customer_refs),
+            "customer_semantics": "Actor-scoped opaque references only; spending covers authorized products, never all purchases.",
             "current_date": datetime.now(timezone.utc).date().isoformat(),
             "date_semantics": "UTC; start inclusive, end exclusive; all-time must be explicit",
         }
@@ -212,6 +216,8 @@ class AnalyticsService:
             raise BudgetExceeded("The analysis requires more queries than this request permits.")
         for spec in plan.queries:
             used_products.update(permitted_products(spec, scope))
+            if not set(spec.customer_refs or []).issubset(self.context.customer_refs):
+                return TurnResult("Use a customer reference from a previous ranking in this conversation, or rerun the ranking.")
             for labels in (spec.states, spec.countries, spec.categories):
                 for label in labels or []:
                     validate_text(label)
@@ -239,7 +245,7 @@ class AnalyticsService:
                 if self._scope() != scope:
                     raise ScopeViolation("Product permissions changed during the request.")
                 raw_empty = not outcome.rows
-                approved = outcome.suppress_small_groups(self.settings.min_group_customers)
+                approved = outcome.approve_for_model(spec, self.settings.min_group_customers)
                 item = {**approved.to_dict(), "query_index": index,
                         "period": {"start": str(spec.start_date) if spec.start_date else None,
                                    "end_exclusive": str(spec.end_date) if spec.end_date else None}}
@@ -314,6 +320,9 @@ class AnalyticsService:
         self.context.last_report = report
         self.context.last_evidence = evidence
         self.context.last_products = tuple(sorted(used_products))
+        self.context.customer_refs.update(
+            row["customer"] for item in evidence for row in item["rows"] if "customer" in row
+        )
         self.context.history.extend([
             {"role": "user", "content": question},
             {"role": "assistant", "content": report.to_markdown()[:4000]},

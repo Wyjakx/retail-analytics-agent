@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints, field_validator, model_validator
 
 
 Metric = Literal["revenue", "orders", "purchasing_customers", "units", "average_order_value", "spend_per_customer"]
-Dimension = Literal["month", "state", "country", "category", "product"]
+Dimension = Literal["month", "state", "country", "category", "product", "customer"]
+CustomerReference = Annotated[str, StringConstraints(pattern=r"^cust_[0-9a-f]{32}$", strict=True)]
 
 SAFE_COLUMNS: dict[str, tuple[str, ...]] = {
     "orders": ("order_id", "user_id", "status"),
@@ -67,16 +68,19 @@ class QuerySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metrics: list[Metric] = Field(min_length=1, max_length=6)
-    dimensions: list[Dimension] = Field(default_factory=list, max_length=5)
+    dimensions: list[Dimension] = Field(default_factory=list, max_length=6)
     start_date: date | None = None
     end_date: date | None = None
     product_ids: list[StrictInt] | None = Field(default=None, min_length=1, max_length=100)
     states: list[str] | None = Field(default=None, min_length=1, max_length=50)
     countries: list[str] | None = Field(default=None, min_length=1, max_length=50)
     categories: list[str] | None = Field(default=None, min_length=1, max_length=50)
+    customer_refs: list[CustomerReference] | None = Field(default=None, min_length=1, max_length=50)
+    order_by: Metric | None = None
+    order_direction: Literal["asc", "desc"] = "desc"
     limit: StrictInt = Field(default=50, ge=1, le=50)
 
-    @field_validator("metrics", "dimensions", "product_ids", "states", "countries", "categories")
+    @field_validator("metrics", "dimensions", "product_ids", "states", "countries", "categories", "customer_refs")
     @classmethod
     def unique_values(cls, values: list[Any] | None) -> list[Any] | None:
         if values is not None and len(values) != len(set(values)):
@@ -103,6 +107,8 @@ class QuerySpec(BaseModel):
             raise ValueError("Supply both date bounds or neither for explicit all-time analysis.")
         if self.start_date is not None and self.end_date is not None and self.start_date >= self.end_date:
             raise ValueError("start_date must precede exclusive end_date.")
+        if self.order_by is not None and self.order_by not in self.metrics:
+            raise ValueError("order_by must be one of the selected metrics.")
         return self
 
 
@@ -143,7 +149,7 @@ class SQLCompiler:
             raise SchemaViolation("Use a trusted project.dataset identifier.")
         self.dataset = dataset
 
-    def compile(self, spec: QuerySpec, scope: ActorScope) -> CompiledQuery:
+    def compile(self, spec: QuerySpec, scope: ActorScope, customer_ids: tuple[int, ...] | None = None) -> CompiledQuery:
         spec = QuerySpec.model_validate(spec.model_dump())
         products = permitted_products(spec, scope)
         parameters = [SQLParameter("allowed_products", "INT64", products, True)]
@@ -153,6 +159,15 @@ class SQLCompiler:
             "o.status IN ('Complete', 'Shipped')",
             "oi.sale_price >= 0",
         ]
+        if spec.customer_refs is not None:
+            if customer_ids is None or len(customer_ids) != len(spec.customer_refs):
+                raise ScopeViolation("Customer references require trusted resolution for this actor.")
+            if any(type(value) is not int or value <= 0 for value in customer_ids):
+                raise ScopeViolation("The trusted customer reference resolution is invalid.")
+            filters.append("oi.user_id IN UNNEST(@resolved_customers)")
+            parameters.append(SQLParameter("resolved_customers", "INT64", customer_ids, True))
+        elif customer_ids is not None:
+            raise ScopeViolation("Customer resolution requires customer references.")
         if spec.start_date is not None:
             filters.extend(["oi.created_at >= TIMESTAMP(@start_date)", "oi.created_at < TIMESTAMP(@end_date)"])
             parameters.extend([SQLParameter("start_date", "DATE", spec.start_date), SQLParameter("end_date", "DATE", spec.end_date)])
@@ -168,8 +183,10 @@ class SQLCompiler:
             "country": "COALESCE(u.country, 'Unknown')",
             "category": "COALESCE(p.category, 'Unknown')",
             "product": "CONCAT(CAST(p.id AS STRING), ': ', p.name)",
+            "customer": "oi.user_id",
         }
-        select = [f"{dimension_expressions[name]} AS {name}" for name in spec.dimensions]
+        dimension_aliases = ["_customer_id" if name == "customer" else name for name in spec.dimensions]
+        select = [f"{dimension_expressions[name]} AS {alias}" for name, alias in zip(spec.dimensions, dimension_aliases)]
         select.extend(["oi.order_id AS scoped_order", "oi.user_id AS scoped_customer", "oi.sale_price AS scoped_price"])
         metrics = {
             "revenue": "ROUND(SUM(scoped_price), 2)",
@@ -179,10 +196,11 @@ class SQLCompiler:
             "average_order_value": "ROUND(SAFE_DIVIDE(SUM(scoped_price), COUNT(DISTINCT scoped_order)), 2)",
             "spend_per_customer": "ROUND(SAFE_DIVIDE(SUM(scoped_price), COUNT(DISTINCT scoped_customer)), 2)",
         }
-        output = list(spec.dimensions) + [f"{metrics[name]} AS {name}" for name in spec.metrics]
+        output = dimension_aliases + [f"{metrics[name]} AS {name}" for name in spec.metrics]
         output.append("COUNT(DISTINCT scoped_customer) AS group_customer_count")
-        group = "\nGROUP BY " + ", ".join(spec.dimensions) if spec.dimensions else ""
-        order = "\nORDER BY " + ", ".join(spec.dimensions) if spec.dimensions else ""
+        group = "\nGROUP BY " + ", ".join(dimension_aliases) if dimension_aliases else ""
+        ordering = ([f"{spec.order_by} {spec.order_direction.upper()}"] if spec.order_by else []) + dimension_aliases
+        order = "\nORDER BY " + ", ".join(ordering) if ordering else ""
         sql = (
             "WITH scoped_items AS (\n  SELECT " + ", ".join(select)
             + f"\n  FROM `{self.dataset}.order_items` oi"

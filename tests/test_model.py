@@ -125,11 +125,13 @@ def test_offline_followup_keeps_period_metrics_and_product_filters():
     asyncio.run(run())
 
 
-def test_offline_requires_explicit_period_and_refuses_personal_rankings():
+def test_offline_requires_explicit_period_and_refuses_raw_personal_data():
     async def run():
         model = OfflineModel()
         assert (await model.plan("Monthly sales", [], {})).action == "clarify"
-        assert (await model.plan("Top customers all time", [], {})).action == "refuse"
+        assert (await model.plan("Top customers all time", [], {})).action == "clarify"
+        assert (await model.plan("Top customers by spend with names and emails all time", [], {})).action == "refuse"
+        assert (await model.plan("Top customers by spend with customer name all time", [], {})).action == "refuse"
         assert (await model.plan("Describe database tables", [], {})).action == "schema"
         assert (await model.plan("Revenue all time", [], {})).plan.queries[0].start_date is None
     asyncio.run(run())
@@ -217,3 +219,107 @@ def test_deterministic_report_labels_supplied_periods_and_never_invents_them():
     assert report.findings[0] == "[E1] Period: 2025-01-01 (inclusive) to 2025-02-01 (exclusive). revenue=100"
     assert report.findings[1] == "[E2] Period: all time. revenue=200"
     assert report.findings[2] == "[E3] revenue=300"
+
+
+@pytest.mark.parametrize("question,limit", [
+    ("Top 5 customers by spend in 2025", 5),
+    ("Top spending customers all time", 10),
+    ("Top 8 customers by revenue in 2025", 8),
+    ("Les 7 meilleurs clients par depenses en 2025", 7),
+    ("Meilleurs clients par dépenses depuis toujours", 10),
+])
+def test_offline_pseudonymous_customer_rankings_use_scoped_revenue(question, limit):
+    decision = asyncio.run(OfflineModel().plan(question, [], {}))
+    assert decision.action == "analysis"
+    query = decision.plan.queries[0]
+    assert query.dimensions == ["customer"]
+    assert query.metrics == ["revenue"]
+    assert query.order_by == "revenue"
+    assert query.order_direction == "desc"
+    assert query.limit == limit
+    assert query.customer_refs is None
+
+
+@pytest.mark.parametrize("question", [
+    "Best customers in 2025", "Meilleurs clients en 2025",
+    "Top 51 customers by spend all time", "Top 0 customers by spend in 2025",
+])
+def test_ambiguous_customer_rankings_and_out_of_bounds_limits_clarify(question):
+    assert asyncio.run(OfflineModel().plan(question, [], {})).action == "clarify"
+
+
+@pytest.mark.parametrize("followup", [
+    "Break down CUST_20252025202520252025202520252025 by month",
+    "Detaille cust_20252025202520252025202520252025 par mois",
+])
+def test_customer_reference_followup_preserves_period_and_scope_and_removes_ranking(followup):
+    async def run():
+        reference = "cust_20252025202520252025202520252025"
+        model = OfflineModel()
+        prior = await model.plan("Top 5 customers by spend for product 1 in California in 2025", [], {})
+        result = await model.plan(followup, [], {"allowed_customer_refs": [reference]}, previous_plan=prior.plan)
+        query = result.plan.queries[0]
+        assert query.customer_refs == [reference]
+        assert query.dimensions == ["month"]
+        assert query.metrics == ["revenue"]
+        assert query.product_ids == [1]
+        assert query.states == ["California"]
+        assert query.start_date == date(2025, 1, 1)
+        assert query.end_date == date(2026, 1, 1)
+        assert query.order_by is None
+        assert query.limit == 50
+    asyncio.run(run())
+
+
+def test_new_general_top_customer_request_clears_previous_customer_filter():
+    async def run():
+        reference = "cust_" + "a" * 32
+        model = OfflineModel()
+        prior = await model.plan("Top customers by revenue for product 1 in California in 2025", [], {})
+        individual = await model.plan(f"Break down {reference} by month", [], {"allowed_customer_refs": [reference]}, previous_plan=prior.plan)
+        general = await model.plan("Top 3 customers by spend", [], {"allowed_customer_refs": [reference]}, previous_plan=individual.plan)
+        query = general.plan.queries[0]
+        assert query.customer_refs is None
+        assert query.dimensions == ["customer"]
+        assert query.product_ids == [1]
+        assert query.states == ["California"]
+        assert query.start_date == date(2025, 1, 1)
+        assert query.limit == 3
+    asyncio.run(run())
+
+
+def test_customer_ref_without_breakdown_does_not_keep_inherited_customer_group():
+    async def run():
+        reference = "cust_" + "b" * 32
+        model = OfflineModel()
+        prior = await model.plan("Top customers by revenue in 2025", [], {})
+        result = await model.plan(f"What about {reference}?", [], {"allowed_customer_refs": [reference]}, previous_plan=prior.plan)
+        assert result.plan.queries[0].dimensions == []
+        assert result.plan.queries[0].order_by is None
+        assert result.plan.queries[0].customer_refs == [reference]
+    asyncio.run(run())
+
+
+def test_unknown_and_malformed_customer_references_refuse_and_ordinal_requests_clarify():
+    async def run():
+        model = OfflineModel()
+        reference = "cust_" + "c" * 32
+        assert (await model.plan(f"Revenue for {reference} in 2025", [], {})).action == "refuse"
+        assert (await model.plan("Revenue for cust_123 in 2025", [], {})).action == "refuse"
+        assert (await model.plan("Revenue for cust_ in 2025", [], {})).action == "refuse"
+        prior = await model.plan("Top customers by spend in 2025", [], {})
+        assert (await model.plan("And the first customer by month?", [], {}, previous_plan=prior.plan)).action == "clarify"
+        assert (await model.plan(f"Revenue for {reference}", [], {"allowed_customer_refs": [reference]})).action == "clarify"
+    asyncio.run(run())
+
+
+def test_customer_report_keeps_opaque_refs_and_explains_scoped_amounts():
+    reference = "cust_" + "1234" * 8
+    report = deterministic_report([
+        {"evidence_id": "E1", "period": {"start": None, "end_exclusive": None},
+         "rows": [{"customer": reference, "revenue": 35.5}]},
+    ])
+    assert f"customer={reference}; revenue=35.5" in report.findings[0]
+    assert "pseudonymous" in report.summary
+    assert any("not complete customer lifetime spending" in value for value in report.caveats)
+    assert any("authorized products" in value for value in report.caveats)

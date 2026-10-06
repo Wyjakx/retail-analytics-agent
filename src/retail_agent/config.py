@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 
 from dotenv import load_dotenv
 
@@ -40,6 +41,7 @@ class Settings:
     max_model_retries: int = 2
     min_group_customers: int = 3
     permissions_file: Path | None = None
+    customer_pseudonym_key: str | None = field(default=None, repr=False)
 
     @classmethod
     def load(cls, env_file: str | None = ".env") -> Settings:
@@ -62,6 +64,7 @@ class Settings:
                 Path(os.environ["PRODUCT_PERMISSIONS_FILE"])
                 if os.environ.get("PRODUCT_PERMISSIONS_FILE") else None
             ),
+            customer_pseudonym_key=os.environ.get("CUSTOMER_PSEUDONYM_KEY") or None,
         )
         if settings.max_queries > 3 or settings.max_corrections > 1:
             raise ConfigurationError("Prototype caps: at most 3 queries and 1 correction cycle.")
@@ -69,6 +72,8 @@ class Settings:
             raise ConfigurationError("Prototype cap: at most 2 transient model retries.")
         if settings.min_group_customers < 3:
             raise ConfigurationError("MIN_GROUP_CUSTOMERS must be at least 3.")
+        if settings.customer_pseudonym_key and not re.fullmatch(r"[0-9a-fA-F]{64}", settings.customer_pseudonym_key):
+            raise ConfigurationError("CUSTOMER_PSEUDONYM_KEY must contain 64 hexadecimal characters.")
         return settings
 
     def validate_live(self) -> None:
@@ -78,6 +83,28 @@ class Settings:
             raise ConfigurationError("Set GEMINI_MODEL to an available Gemini model before --live.")
         if not self.project:
             raise ConfigurationError("Set GOOGLE_CLOUD_PROJECT to a BigQuery billing project.")
+
+
+def load_pseudonym_key(settings: Settings) -> bytes:
+    """Keep a stable local secret outside source control; fail closed on damaged state."""
+    if settings.customer_pseudonym_key:
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", settings.customer_pseudonym_key):
+            raise ConfigurationError("CUSTOMER_PSEUDONYM_KEY must contain 64 hexadecimal characters.")
+        return bytes.fromhex(settings.customer_pseudonym_key)
+    path = settings.data_dir / "customer-pseudonym.key"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with path.open("xb") as handle:
+                handle.write(secrets.token_bytes(32))
+        except FileExistsError:
+            pass
+        key = path.read_bytes()
+        if len(key) != 32:
+            raise ConfigurationError("The local customer pseudonym key is invalid; restore its original value.")
+        return key
+    except OSError as exc:
+        raise ConfigurationError("Cannot read or create the local customer pseudonym key.") from exc
 
 
 DEMO_PERMISSIONS = {"analyst_north": [1, 2], "analyst_south": [3, 4]}

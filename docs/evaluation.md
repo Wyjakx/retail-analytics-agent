@@ -18,9 +18,9 @@ With that environment activated, the equivalent commands are `python -m pytest` 
 | Run | Evidence at this development stage |
 | --- | --- |
 | Saved-report service | 17 tests verified locally, including concurrent confirmations and rollback |
-| Complete test suite | 112 tests and 5 subtests passed on Python 3.12.14 / Windows, 5 October 2026 |
+| Complete test suite | 149 tests and 5 subtests passed on Python 3.12.14 / Windows, 6 October 2026 |
 | Static checks and dependencies | Ruff passes; `pip check` reports no broken requirements |
-| Scripted CLI demo | Verified: comparison, follow-up, save, PII refusal, preview, plain-yes refusal, cancel and explicit confirmation |
+| Scripted CLI demo | Verified: comparison, follow-up, save, pseudonymous customer ranking and monthly follow-up, PII refusal, preview, plain-yes refusal, cancel and explicit confirmation |
 | Live Gemini and BigQuery | Not validated in this document |
 
 ## Scenarios and expected results
@@ -29,12 +29,16 @@ Use fixture calculations as independent expected answers, rather than checking o
 
 For product 1 across January and February 2025, expect revenue 900, 24 orders, 12 purchasing customers, 24 units, scoped average order value 37.50 and spend per purchasing customer 75. January revenue is 300 and February revenue is 600. California contributes 360 and Texas 540 across both months. These amounts are synthetic and have no asserted currency. In particular, north-analyst revenue must exclude the 12,000 from product 3.
 
+For customer spending in 2025, six customers each contribute 90 and six each contribute 60 within the permitted products. A top-five query returns five 90-valued rows, ordered before the limit; unauthorized product spending cannot affect their amounts or ranking. A selected 90-valued customer's monthly follow-up returns January 30 and February 60 using only its opaque reference.
+
 | Scenario | Expected check | Evaluation layer |
 | --- | --- | --- |
 | Arithmetic and dates | Verify the fixture answers above, UTC month grouping, inclusive start and exclusive end, status exclusions and empty periods. | Compiler and gateway tests; manual SQL comparison in a live run |
 | Mixed-product orders | Filter unauthorized items before summing revenue or counting scoped orders/customers. An explicit unauthorized product request fails. | Known-answer fixtures and scope tests |
 | Plan injection | Reject unknown metrics, identifier dimensions, raw SQL and extra fields. Treat filter strings as parameter values. | Typed-contract and compiler tests |
-| PII and small groups | Refuse identity/contact requests; omit raw customer IDs; suppress groups below the configured minimum. Reject contact patterns or identifier fields in returned evidence. | Adversarial fixtures, output checks and human review |
+| PII and small groups | Refuse identity/contact requests; omit raw customer IDs; suppress aggregate segments below the configured minimum. Explicitly approved pseudonymous individual analyses retain their scoped statistics. Reject contact patterns or identifier fields in returned evidence. | Adversarial fixtures, output checks and human review |
+| Pseudonymous customers | Verify stable keyed labels, actor separation, metric ordering before LIMIT and scoped monthly follow-ups. Unknown, copied or revoked references cannot broaden a query. Raw IDs, source PII and the key are absent from model payloads, saved evidence, explanations and traces. | HMAC/gateway tests, fake BigQuery rows and recording-model integration |
+| Identifier claims in reports | Raw-ID narrative and fabricated customer references trigger grounded fallback, even when the claimed number matches a valid metric. | Fake-reporter application regression tests |
 | Report grounding | Reject unsupported numerical claims. Review whether supported numbers are attributed to the correct metric, segment and period, and whether findings cite their evidence. | Output tests plus analyst review |
 | Multi-step and follow-up | Compare periods or segments using several bounded queries; a follow-up preserves prior dates/product filters unless explicitly changed. | Application integration and intent review |
 | Empty-result correction | Permit at most one equivalent correction; preserve permissions and requested scope. Distinguish no data from privacy suppression, then explain the limitation. | Injected empty returns and integration tests |
@@ -46,7 +50,7 @@ For product 1 across January and February 2025, expect revenue 900, 24 orders, 1
 | Concurrent report actions | New reports survive an old preview. Overlapping or simultaneous confirmations cannot broaden deletion. A commit failure rolls back deletion and token consumption together. | Separate SQLite connections and forced transaction failures |
 | Correlated traces | Link request, conversation, stage, evidence/query, report and deletion operation IDs; record outcomes, timings, retries and usage. Raw prompts, rows, report bodies and confirmation tokens must be absent. | Trace assertions using distinctive sensitive test markers |
 
-Numerical-token validation is a limited check: a number present in the evidence can still be attached to the wrong fact, or described with the wrong unit. Contact-pattern detectors also do not prove that every possible personal detail is recognized. The application reduces exposure by returning aggregate fields and withholding individual identities; reviewer checks cover the remaining semantic gaps. Empty/rejected-query correction is an equivalent-plan retry, not arbitrary SQL repair; compiler defects require source changes.
+Numerical-token validation is a limited check: a number present in the evidence can still be attached to the wrong fact, or described with the wrong unit. Contact-pattern detectors also do not prove that every possible personal detail is recognized. The application reduces exposure through approved aggregate fields, keyed customer pseudonyms and withholding raw identities; reviewer checks cover the remaining semantic gaps. Pseudonyms remain linkable. Empty/rejected-query correction is an equivalent-plan retry, not arbitrary SQL repair; compiler defects require source changes.
 
 ## Human review and live validation
 

@@ -39,7 +39,7 @@ The dataset is `bigquery-public-data.thelook_ecommerce`; the required tables are
 | Quality and UX evaluation | Numerical, adversarial, ADK-runtime and CLI tests; scripted demonstration | Live analytical evaluation, analyst review and user studies |
 | Persona management | Design only | Versioned nondeveloper configuration with rollback; security policy stays separate |
 
-The local user selector demonstrates authorization rules using provisional fixture permissions. It is not production authentication. Individual customer rankings remain disabled pending the client's privacy clarification. Charts, email and web research are extension points in the design.
+The client accepted predefined demo users and stable pseudonymous customer analyses. The local selector and explicit product mapping demonstrate authorization; production scopes would arrive through a verified frontend JWT. Customer rankings use actor-scoped opaque references, with raw IDs retained inside the Python gateway. Charts, email and web research are extension points in the design.
 
 ## Documents
 
@@ -68,9 +68,10 @@ The default mode needs no API key. It computes synthetic transactions using the 
 .\.venv\Scripts\retail-agent.exe
 .\.venv\Scripts\retail-agent.exe --question "Compare revenue and spend per customer by state in January versus February 2025"
 .\.venv\Scripts\retail-agent.exe --actor analyst_south --question "Show revenue by product in 2025"
+.\.venv\Scripts\retail-agent.exe --question "Top 5 customers by spending in 2025"
 ```
 
-The demo uses two queries for the monthly comparison, follows up by product, saves a report, refuses a PII request and demonstrates both cancellation and confirmed deletion. `/help` lists interactive commands:
+The demo uses two queries for the monthly comparison, follows up by product, saves a report, ranks pseudonymous customers, breaks down one customer's spending by month, refuses a PII request and demonstrates both cancellation and confirmed deletion. In an interactive session, a customer ranking returns references such as `cust_<32 hex characters>`; follow up with `Break down cust_REFERENCE_FROM_RESULTS by month`. Spending always covers authorized products only. `/help` lists interactive commands:
 
 ```text
 /save Q1 analysis
@@ -104,7 +105,9 @@ See [BigQuery client authentication](https://docs.cloud.google.com/bigquery/docs
 
 Live mode checks the four required table schemas and dataset location, compiles SQL from approved expressions, dry-runs it and enforces per-query and per-turn byte caps. Defaults are 100 MB per query, 300 MB per turn, at most three query attempts, one correction cycle and six model calls including retries. These are prototype budgets, not account quotas or a pricing guarantee.
 
-`analyst_north` has demo product IDs `[1, 2]`; `analyst_south` has `[3, 4]`. To use another **trusted demo** mapping, set `PRODUCT_PERMISSIONS_FILE` to a local JSON object such as `{"demo_user": [10, 20]}` and select that actor. The file is reloaded each request. This policy mapping remains provisional until the client responds; it is not a login mechanism.
+`analyst_north` has demo product IDs `[1, 2]`; `analyst_south` has `[3, 4]`. The accepted lightweight approach is illustrated by `config/demo-permissions.json`. Set `PRODUCT_PERMISSIONS_FILE` to that path or another local JSON object such as `{"demo_user": [10, 20]}` and select that actor. The file is reloaded each request. Direct product IDs provide explicit demo entitlements; a production brand-to-product resolver would use trusted catalog data after JWT verification.
+
+Customer references are HMAC-derived from an internal customer ID, the actor and a private key. A random key is created automatically in each mode's runtime directory; an optional `CUSTOMER_PSEUDONYM_KEY` supplies a persistent 64-character hexadecimal secret. Keep it private and stable. Different actors receive different labels. Raw-ID linkage stays in gateway memory and never enters the model, reports or traces. After restart or `/new`, rerun a ranking before referring to a previous label. Minimum-group suppression remains active for aggregate segments; explicitly requested pseudonymous individual analyses are exempt under the client's clarification. Pseudonyms are linkable, not anonymous.
 
 ## Validation and runtime data
 
@@ -115,7 +118,7 @@ Live mode checks the four required table schemas and dataset location, compiles 
 
 The tests use independently specified numerical expectations, fake BigQuery clients, a fake model inside the installed ADK runtime, and the actual CLI/SQLite flow. [Evaluation](docs/evaluation.md) records the verified results and the remaining live/semantic review.
 
-Runtime data goes under `APP_DATA_DIR` (default `runtime`), separated into `demo`, `offline` and `live`. Each mode has `reports.sqlite3` and `events.jsonl`. Conversations are in memory; saved reports and pending-operation outcomes persist. Traces include correlation IDs and usage metadata, not raw questions, SQL, data rows, report bodies or tokens. Runtime files, cloud credentials and local environment files are ignored by Git.
+Runtime data goes under `APP_DATA_DIR` (default `runtime`), separated into `demo`, `offline` and `live`. Each mode has `reports.sqlite3`, `events.jsonl` and, unless configured externally, `customer-pseudonym.key`. Conversations and raw-ID linkage are in memory; saved reports and pending-operation outcomes persist. Traces include correlation IDs and usage metadata, not raw questions, SQL, data rows, report bodies, pseudonyms or tokens. Runtime files, cloud credentials and local environment files are ignored by Git.
 
 ## Read the code
 
@@ -127,8 +130,9 @@ Runtime data goes under `APP_DATA_DIR` (default `runtime`), separated into `demo
 | `src/retail_agent/model.py` | Gemini contracts, offline simulation and grounded fallback reports |
 | `src/retail_agent/analytics.py` | Validated analytical grammar and dynamic SQL compilation |
 | `src/retail_agent/gateways.py` | BigQuery execution controls and computed synthetic fixtures |
+| `src/retail_agent/pseudonyms.py` | Actor-scoped customer labels and private in-memory reference resolution |
 | `src/retail_agent/reports.py` | Transactional report ownership and deletion confirmation |
-| `src/retail_agent/safety.py` | Input/output checks and aggregate result contract |
+| `src/retail_agent/safety.py` | Input/output checks and approved result contract |
 | `src/retail_agent/telemetry.py` | Allowlisted structured events |
 | `src/retail_agent/config.py` | Local settings and demo entitlement resolution |
 
