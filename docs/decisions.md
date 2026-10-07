@@ -1,20 +1,20 @@
 # Initial decisions
 
-Status: agreed framework and implemented local prototype. Offline behavior and the installed ADK runtime are tested; actual Gemini/BigQuery calls and production deployment remain unverified.
+Status: agreed framework and implemented local prototype. Offline behavior, the installed ADK runtime and one live Gemini/BigQuery CLI analysis are verified. Broader live scenarios remain to be validated; production infrastructure is a design proposal.
 
 ## Google ADK 2 with Gemini
 
 Google ADK 2 with Gemini is the selected stack. Its graph workflows make analysis, validation, execution, repair and reporting explicit, combining Python functions and model-driven nodes. This fits the assignment's Gemini and BigQuery services. Custom tools keep authorization, SQL compilation and report operations in application code.
 
-As of 5 October 2026, the installed stable Python package is `google-adk==2.11.0`, published on 2 October and requiring Python 3.10 or later. The application itself requires Python 3.11 for its deadline API and was tested on Python 3.12.14. Dependency versions are frozen in `requirements-lock.txt`. ADK typed-output workflows use ephemeral sessions; actual provider access remains to be verified.
+As of 5 October 2026, the installed stable Python package is `google-adk==2.11.0`, published on 2 October and requiring Python 3.10 or later. The application itself requires Python 3.11 for its deadline API. The complete suite and live CLI were verified on Python 3.12.10 on Windows. Dependency versions are frozen in `requirements-lock.txt`. ADK typed-output workflows use ephemeral sessions; real Gemini planning and reporting passed the recorded smoke test.
 
-The author's prior work includes Python backends, Google ADK agents, Gemini and GCP. This prototype exercises ADK 2 typed-output workflows locally; the configured live model and BigQuery path still need validation. The framework choice fits that background and the assignment's Google services.
+The author's prior work includes Python backends, Google ADK agents, Gemini and GCP. This prototype exercises ADK 2 typed-output workflows locally and through the configured live model. The framework choice fits that background and the assignment's Google services. The verified BigQuery path and remaining evaluation work are recorded in [evaluation](evaluation.md).
 
 ## A constrained analysis plan
 
 The model emits a typed analysis plan; Python validates it and compiles SQL from approved metrics, dimensions, relationships and filters. Product entitlements and PII restrictions are supplied by trusted application state. Values are query parameters, not interpolated SQL strings.
 
-This decision favors a demonstrable security boundary within a small prototype. Its cost is analytical breadth: a request outside the grammar needs clarification or a transparent unsupported response. The catalog composes metrics, grouping, dates and filters for product/region comparisons, monthly metrics, structure questions and multi-query follow-ups. Synthetic calculations and fake-client tests exercise these operations; live BigQuery validation remains outstanding.
+This decision favors a demonstrable security boundary within a small prototype. Its cost is analytical breadth: a request outside the grammar needs clarification or a transparent unsupported response. The catalog composes metrics, grouping, dates and filters for product/region comparisons, monthly metrics, structure questions and multi-query follow-ups. Synthetic calculations and fake-client tests exercise these operations. A real six-metric product analysis matched independent BigQuery SQL; broader live coverage remains outstanding.
 
 Unrestricted model-generated SQL is an alternative for broader analysis. It would require stronger restricted-data boundaries and validation; a SELECT check or an AST parser alone is not sufficient. Whether the constrained approach satisfies the evaluator's expected breadth is an open assumption to make explicit.
 
@@ -26,7 +26,7 @@ The deletion service owns preview, expiry, confirmation and atomic execution. AD
 
 ## Credentials and model version
 
-Gemini credentials and BigQuery application-default credentials are local setup concerns, not repository contents. Dependencies are pinned; `GEMINI_MODEL` is required explicitly in live mode so the operator chooses an available model. The chosen model and account access still need a live check. A configurable model avoids embedding a changing provider alias into business logic.
+Gemini credentials and BigQuery application-default credentials are local setup concerns, not repository contents. Dependencies are pinned; `GEMINI_MODEL` is required explicitly in live mode so the operator chooses an available model. The recorded live CLI smoke test used `gemini-3.5-flash-lite` and application-default credentials. Each evaluator must configure their own available model and account access. A configurable model avoids embedding a changing provider alias into business logic.
 
 ## Client clarification
 

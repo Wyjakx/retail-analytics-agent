@@ -1,6 +1,6 @@
 # Development notes
 
-The prototype answers retail analysis questions through a Python application. Gemini proposes a plan and report wording; Python decides what can be queried, computes the results and controls saved reports. The local CLI flow is implemented and offline-tested. These notes explain the choices reflected in the code and the remaining live validation.
+The prototype answers retail analysis questions through a Python application. Gemini proposes a plan and report wording; Python decides what can be queried, computes the results and controls saved reports. The local CLI flow is implemented, offline-tested and verified through one live analysis. These notes explain the choices reflected in the code and the broader live validation still required.
 
 ## ADK model stages and Python controls
 

@@ -1,6 +1,6 @@
 # Proposed implementation plan
 
-**Status: the local prototype is implemented and offline-tested. The client accepted demo permissions and pseudonymous customer analyses. Remaining work is live validation, business metric definitions and human report/UX review. No deployment is claimed.**
+**Status: the local prototype is implemented, offline-tested and verified through one live CLI analysis. The client accepted demo permissions and pseudonymous customer analyses. Broader live scenarios and human report/UX review remain outstanding; metric definitions are documented and need business approval before production. No deployment is claimed.**
 
 Build a local Google ADK 2 + Gemini CLI using BigQuery, SQLite and Rich. Implement safety, report confirmation, resilience and observability. Keep Golden retrieval, preference learning, persona administration and production infrastructure design-only. See [architecture.md](architecture.md).
 

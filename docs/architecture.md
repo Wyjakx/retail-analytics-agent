@@ -1,14 +1,14 @@
 # Proposed architecture
 
-**Status: local prototype implemented and offline-tested. Live integrations remain unverified; the production HLD is a design proposal and no deployment is claimed.**
+**Status: runnable local prototype with a verified live CLI smoke test. Gemini planning, BigQuery execution and Gemini reporting completed a real analysis; broader live scenarios remain to be validated. The production HLD is a design proposal and no deployment is claimed.**
 
-The assistant translates retail questions into bounded analyses and explains computed results. Gemini proposes plans and wording; Python enforces permissions, privacy, budgets and report operations. The stack is Google ADK 2, Gemini, BigQuery, SQLite and Rich. ADK provides explicit graph workflows combining Python functions and model-driven steps, fitting the assignment's Google services. The installed baseline is `google-adk==2.11.0`; typed-output workflows were exercised with a fake ADK model, while real service calls remain unverified. [ADK graph workflows](https://adk.dev/graphs/), [released package](https://pypi.org/project/google-adk/2.11.0/).
+The assistant translates retail questions into bounded analyses and explains computed results. Gemini proposes plans and wording; Python enforces permissions, privacy, budgets and report operations. The stack is Google ADK 2, Gemini, BigQuery, SQLite and Rich. ADK provides explicit graph workflows combining Python functions and model-driven steps, fitting the assignment's Google services. The installed baseline is `google-adk==2.11.0`; typed-output workflows were exercised with a fake ADK model and real Gemini planning/reporting calls. [Evaluation](evaluation.md) records the verified path and its limits. [ADK graph workflows](https://adk.dev/graphs/), [released package](https://pypi.org/project/google-adk/2.11.0/).
 
 ## Prototype scope
 
 The local prototype implements analysis, owned-report confirmation, bounded failures and correlated metadata in a CLI. Numerical and adversarial tests check these behaviors. Golden retrieval, preference learning and persona administration remain HLD-only, alongside production authentication, hosting and future tools. Session context supports follow-ups without claiming preference learning.
 
-The live gateway queries configured tables in `bigquery-public-data.thelook_ecommerce`, validating required schema fields and location before execution. Actual joins, types and usable dates still need live verification. SQLite holds report ownership and pending confirmations; sanitized conversation state remains in application memory. Each ADK model stage uses an ephemeral session with approved context. Rich handles presentation. Application policy controls every operation.
+The live gateway queries configured tables in `bigquery-public-data.thelook_ecommerce`, validating required schema fields and location before execution. The four required schemas, US location and a scoped all-time analysis were verified live; all six metrics matched independent SQL. Live follow-ups and multi-query comparisons remain to be validated. SQLite holds report ownership and pending confirmations; sanitized conversation state remains in application memory. Each ADK model stage uses an ephemeral session with approved context. Rich handles presentation. Application policy controls every operation.
 
 ```mermaid
 flowchart LR
@@ -30,7 +30,7 @@ flowchart LR
 
 ## Analysis workflow
 
-Route requests to analysis, clarification, report actions or refusal. Gemini produces a typed `AnalysisPlan`: metrics, dimensions, dates, filters and dependent operations. Python validates it against the catalog, actor entitlements and budget, then dynamically compiles parameterized SQL. Table identifiers, expressions and joins come from trusted code. [BigQuery parameters](https://docs.cloud.google.com/bigquery/docs/parameterized-queries).
+Route requests to analysis, clarification, report actions or refusal. Gemini produces a typed `AnalysisPlan` containing up to three independent, preplanned queries: metrics, dimensions, dates and filters. Python validates it against the catalog, actor entitlements and budget, then dynamically compiles parameterized SQL. The application executes the queries before synthesizing their combined evidence; conversational follow-ups can build on previous results. Table identifiers, expressions and joins come from trusted code. [BigQuery parameters](https://docs.cloud.google.com/bigquery/docs/parameterized-queries).
 
 The operation catalog should compose aggregates, comparisons and contribution breakdowns. For a spending comparison between states, compute scoped revenue, purchasing-customer count, order frequency, basket value and product mix before explanation.
 

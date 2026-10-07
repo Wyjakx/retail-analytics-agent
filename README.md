@@ -100,8 +100,11 @@ gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 Complete the Google consent page, including its requested Google Cloud access. A normal `gcloud auth login` does not by itself configure ADC for the Python client. See [BigQuery client authentication](https://docs.cloud.google.com/bigquery/docs/authentication) for supported alternatives. Keep all API keys and credential files outside Git.
 
 ```powershell
-.\.venv\Scripts\retail-agent.exe --live --question "Show monthly revenue for product 1 in 2025"
+.\.venv\Scripts\retail-agent.exe --live
+.\.venv\Scripts\retail-agent.exe --live --question "Show revenue, orders, purchasing customers, units, average order value, and spend per customer by product for products 1 and 2, all time."
 ```
+
+The first command starts an interactive chat. The second runs the question used in the verified live smoke test and exits. In that run, one product row was visible and another was suppressed by the minimum-customer rule. Results depend on the public dataset at query time. A product-1 query restricted to 2025 returned no rows in the recorded test; the application kept that period rather than silently broadening it.
 
 Live mode checks the four required table schemas and dataset location, compiles SQL from approved expressions, dry-runs it and enforces per-query and per-turn byte caps. Defaults are 100 MB per query, 300 MB per turn, at most three query attempts, one correction cycle and six model calls including retries. These are prototype budgets, not account quotas or a pricing guarantee.
 
