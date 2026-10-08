@@ -18,7 +18,9 @@ With that environment activated, the equivalent commands are `python -m pytest` 
 | Run | Evidence at this development stage |
 | --- | --- |
 | Saved-report service | 17 tests verified locally, including concurrent confirmations and rollback |
-| Complete test suite | 182 tests and 5 subtests passed on Python 3.12.10 / Windows, 6 October 2026 |
+| Complete test suite | 240 tests and 5 subtests passed, zero skips, on Python 3.12.14 / Windows, 8 October 2026 (Streamlit installed) |
+| Optional UI installation | Fresh environment installed `requirements-ui-lock.txt` and the editable package; Streamlit 1.65.0 starts and `pip check` passes |
+| Streamlit browser walkthrough | Offline comparison, product follow-up, literal-title save/open, cancel/confirm deletion, customer ranking and monthly follow-up, PII refusal, new conversation and actor switch verified on loopback |
 | Static checks and dependencies | Ruff passes; `pip check` reports no broken requirements |
 | Scripted CLI demo | Verified: comparison, follow-up, save, pseudonymous customer ranking and monthly follow-up, PII refusal, preview, plain-yes refusal, cancel and explicit confirmation |
 | Live Gemini stages | Real ADK planning and reporting passed with `gemini-3.5-flash-lite` after the structured-output compatibility correction |
@@ -32,6 +34,35 @@ The live calculations returned one approved product group and suppressed another
 The initial live Python checks used a short-lived credential from an existing authenticated `gcloud` session, supplied directly to the test client. Google consent was then completed, ADC configured with the execution project's quota context, and the normal `retail-agent --live` CLI passed the same analysis. No credential was saved in source control. These checks establish a working analytical path for one case, not broad natural-language accuracy or production readiness.
 
 Gemini initially rejected the legacy schema's `additional_properties` field, then rejected the full JSON schema with array bounds. The runner now sends JSON Schema with `minItems`/`maxItems` omitted only from the provider copy. ADK and application Pydantic validation retain every original array bound and reject excess queries, products and report findings. This behavior is covered by the installed SDK wire-format and ADK graph tests.
+
+## Streamlit validation on 8 October 2026
+
+The UI-enabled suite runs without real cloud calls. AppTest covers clarification replies,
+independent browser state, no implicit analysis on rerun or mode application, safe missing-live
+configuration/provider errors, permission revocation, report reads, literal wildcard selection,
+duplicate titles, expired/stale/superseded confirmations and reports deleted by another session.
+Adapter checks retain SQLite's normal thread ownership and recheck permissions before returning
+results. Chart tests preserve ratio cells, sort months, and reject ambiguous/nonfinite series.
+Row-cap metadata is measured before group suppression, with an explicit possible-truncation notice.
+
+A fresh Python 3.12.14 environment installed the frozen core and optional UI dependencies,
+then the local package with `--no-deps -e .`. The CLI demo completed through explicit deletion.
+The actual Streamlit app was inspected in the in-app browser at `127.0.0.1:8501` with separate
+throwaway runtime data. Tables, bars, monthly series, titles and exact confirmation previews
+were readable. North revenue was 900 across the fixture year; a selected customer contributed
+30 in January and 60 in February; switching to south cleared prior content and returned 12,000
+for the authorized lamp. An invalid actor removed prior results and left safe setup controls.
+The test server was stopped afterward. This is a developer walkthrough, not a user study.
+
+The audit's existing real-clock deadline assertion failed on floating-point subtraction
+(`0.1000000000003638 <= 0.1`). It now uses an injected clock at exact binary fractions,
+verifying decreasing remaining time, expiry and job cancellation without changing runtime logic.
+
+No new Gemini/BigQuery live run was performed for the UI. The live rows above describe the
+previous CLI validation, not a Streamlit live evaluation. General semantic attribution remains
+limited by the numerical-token validator. SQL still applies its result limit before Python's
+small-group suppression, so eligible groups can be omitted; the UI discloses possible truncation
+but does not change that query policy. Authentication and deployment remain outside this local demo.
 
 ## Scenarios and expected results
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python >=3.11 (existing requirement; verify on Python 3.12), Streamlit 1.65.0, existing Pydantic/Rich/SQLite stack, pinned Google ADK 2.11.0 and BigQuery client, pytest, Ruff, Streamlit AppTest.
 
-**Spec:** [Approved design](../specs/2026-10-08-streamlit-design.md). Read it alongside this plan. User approved the spec on 8 October 2026; this plan awaits review and execution-method selection.
+**Spec:** [Approved design](../specs/2026-10-08-streamlit-design.md). Read it alongside this plan. User approved the spec on 8 October 2026; the user approved this plan and Native execution on 8 October 2026. Tasks 1–6 implementation and verification are complete; final independent review is pending.
 
 ## Global Constraints
 
@@ -65,7 +65,7 @@ The earlier audit observed 181 passing tests, 5 passing subtests and one failing
 - Produces `Conversation.pending_clarification: list[dict[str, str]]` with user/assistant records; planning receives an explicitly labeled copy at `safe_catalog['pending_clarification']`.
 - Pending context contains at most six records and 4,000 characters in total. If the budget would be exceeded, clear it and ask for one complete question rather than truncating a meaningful filter.
 
-- [ ] **Step 1: Add failing conversation regressions.** Reuse the existing `service` and `ask` helpers:
+- [x] **Step 1: Add failing conversation regressions.** Reuse the existing `service` and `ask` helpers:
 
 ```python
 def test_clarification_reply_completes_original_question(service):
@@ -80,10 +80,10 @@ def test_clarification_reply_completes_original_question(service):
 
 Also test an ambiguous `Top customers` request after an unrelated analysis, resolved with `By spending in 2025` (customer dimension and revenue ranking); a new complete `Show units by state in 2024` request overrides pending revenue/product constraints. Test `/reports` neither consumes nor becomes a clarification answer. A recording model must observe redacted secrets/tokens only; refusal and scope revocation must leave `pending_clarification == []`. Overflow must produce clarification with no gateway call.
 
-- [ ] **Step 2: Run the new tests red.** Run `.venv/Scripts/python.exe -m pytest tests/test_service.py tests/test_model.py tests/test_security_integration.py -k clarification -q`; expect missing context/plan assertions to fail, not dependency errors.
-- [ ] **Step 3: Implement the context lifecycle.** Record only sanitized questions and validated clarification text. Supply unresolved context distinctly from successful history to both planning and report synthesis; the latest complete request takes precedence. Update offline parsing to use pending context only to fill missing information, while retaining its existing limits. Do not infer all-time data, concatenate a year into a product-ID list, or inherit an unrelated successful plan. Clear pending context after successful analysis/refusal and scope reset. Commands continue to route before analytical planning.
-- [ ] **Step 4: Run the three affected test modules.** Expect all tests to pass and ordinary follow-ups to preserve their existing behavior.
-- [ ] **Step 5: Commit only this task's source/tests.** Message: `fix: retain analytical context across clarification replies`.
+- [x] **Step 2: Run the new tests red.** Run `.venv/Scripts/python.exe -m pytest tests/test_service.py tests/test_model.py tests/test_security_integration.py -k clarification -q`; expect missing context/plan assertions to fail, not dependency errors.
+- [x] **Step 3: Implement the context lifecycle.** Record only sanitized questions and validated clarification text. Supply unresolved context distinctly from successful history to both planning and report synthesis; the latest complete request takes precedence. Update offline parsing to use pending context only to fill missing information, while retaining its existing limits. Do not infer all-time data, concatenate a year into a product-ID list, or inherit an unrelated successful plan. Clear pending context after successful analysis/refusal and scope reset. Commands continue to route before analytical planning.
+- [x] **Step 4: Run the three affected test modules.** Expect all tests to pass and ordinary follow-ups to preserve their existing behavior.
+- [x] **Step 5: Commit only this task's source/tests.** Message: `fix: retain analytical context across clarification replies`.
 
 ### Task 2: Share runtime setup and isolate browser sessions
 
@@ -97,7 +97,7 @@ Also test an ambiguous `Top customers` request after an unrelated analysis, reso
 - `WebSession(actor_id: str = 'analyst_north', mode: Literal['offline', 'live'] = 'offline', settings: Settings | None = None)` exposes `context: Conversation`, `runtime: RuntimeDependencies`, `transcript: list[TranscriptTurn]`, `busy: bool`.
 - Methods: `refresh_access() -> ActorScope`, `submit(question: str) -> TurnResult`, `run_command(command: str) -> TurnResult`, `reset(*, actor_id: str | None = None, mode: Literal['offline', 'live'] | None = None) -> None`. `run_command` accepts slash commands only and does not append them to analytical chat.
 
-- [ ] **Step 1: Add failing adapter tests.** Create `make_session` fixtures using unscoped `Settings(data_dir=tmp_path)` and optionally a temporary permissions file. Test separate sessions/actors (`a.context is not b.context`; `b.transcript == []` after `a.submit(...)`), shared persistence for the same actor, and reset clearing customer linkage/pending clarification/transcript. Invoke the same adapter sequentially from two different threads; `submit` must work with no retained SQLite connection. Remove or corrupt the permissions file after successful analysis: `refresh_access()` must raise `ConfigurationError` after clearing cached context and transcript. Test revoked product scope likewise clears evidence. Verify sanitized transcript excludes a synthetic configured key, contact values and both pending/consumed confirmation tokens.
+- [x] **Step 1: Add failing adapter tests.** Create `make_session` fixtures using unscoped `Settings(data_dir=tmp_path)` and optionally a temporary permissions file. Test separate sessions/actors (`a.context is not b.context`; `b.transcript == []` after `a.submit(...)`), shared persistence for the same actor, and reset clearing customer linkage/pending clarification/transcript. Invoke the same adapter sequentially from two different threads; `submit` must work with no retained SQLite connection. Remove or corrupt the permissions file after successful analysis: `refresh_access()` must raise `ConfigurationError` after clearing cached context and transcript. Test revoked product scope likewise clears evidence. Verify sanitized transcript excludes a synthetic configured key, contact values and both pending/consumed confirmation tokens.
 
 ```python
 def test_two_sessions_do_not_share_analysis(tmp_path):
@@ -109,10 +109,10 @@ def test_two_sessions_do_not_share_analysis(tmp_path):
     assert a.context.conversation_id != b.context.conversation_id
 ```
 
-- [ ] **Step 2: Run `.venv/Scripts/python.exe -m pytest tests/test_web_session.py -q`.** Expect imports/new-interface assertions to fail.
-- [ ] **Step 3: Implement the runtime factory and adapter.** Extract CLI construction into `build_runtime`, preserving all three mode directories and CLI behavior. For every action open/close `ReportStore` on the calling thread, construct the service around the session context, and run its async handler synchronously. Reset a busy flag in `finally`; reject overlapping actions. Recheck permissions before submission and rendering. On reset or access failure cancel an outstanding operation with the original actor, then clear display/context even if cleanup fails. Recreate model/gateway on reset. Retain issued tokens privately for session-lifetime redaction, including after reset; no global cache. Keep at most the latest 20 transcript turns. `run_command` rejects ordinary questions so automatic library refresh cannot reach the model.
-- [ ] **Step 4: Run `.venv/Scripts/python.exe -m pytest tests/test_web_session.py tests/test_service.py -q`.** Expect PASS, including the existing CLI subprocess demo and missing-live-settings tests.
-- [ ] **Step 5: Commit this adapter and CLI integration.** Message: `refactor: share runtime setup with isolated web sessions`.
+- [x] **Step 2: Run `.venv/Scripts/python.exe -m pytest tests/test_web_session.py -q`.** Expect imports/new-interface assertions to fail.
+- [x] **Step 3: Implement the runtime factory and adapter.** Extract CLI construction into `build_runtime`, preserving all three mode directories and CLI behavior. For every action open/close `ReportStore` on the calling thread, construct the service around the session context, and run its async handler synchronously. Reset a busy flag in `finally`; reject overlapping actions. Recheck permissions before submission and rendering. On reset or access failure cancel an outstanding operation with the original actor, then clear display/context even if cleanup fails. Recreate model/gateway on reset. Retain issued tokens privately for session-lifetime redaction, including after reset; no global cache. Keep at most the latest 20 transcript turns. `run_command` rejects ordinary questions so automatic library refresh cannot reach the model.
+- [x] **Step 4: Run `.venv/Scripts/python.exe -m pytest tests/test_web_session.py tests/test_service.py -q`.** Expect PASS, including the existing CLI subprocess demo and missing-live-settings tests.
+- [x] **Step 5: Commit this adapter and CLI integration.** Message: `refactor: share runtime setup with isolated web sessions`.
 
 ### Task 3: Expose authorized saved-report reads and safe confirmation actions
 
@@ -124,7 +124,7 @@ def test_two_sessions_do_not_share_analysis(tmp_path):
 - `DeletionPreview`: dataclass with `operation_id: str`, `targets: tuple[ReportTarget, ...]`, `expires_at: float`; deliberately no token.
 - `WebSession.pending_preview -> DeletionPreview | None`, `confirm_delete(operation_id: str) -> TurnResult`, `cancel_delete(operation_id: str) -> TurnResult`. An ID must match the current preview; retrieve the token only inside the adapter.
 
-- [ ] **Step 1: Add failing access and deletion tests.** Save a report through analysis then `/save`, and assert `/open ID` returns identical body/evidence for its owner. Assert `saved_report is None` for another actor, revoked permissions, deleted IDs and unsafe stored content. Open a saved report after another analysis and assert `context.last_report` still identifies the latter. Two same-actor sessions should see newly saved reports but have distinct pending operations; updating/deleting a target through a second `ReportStore` must prevent an old preview from committing. Cover wrong operation ID, expired token, cancel and repeat-confirm with unchanged report count. Assert `not hasattr(session.pending_preview, 'token')` and recorded transcript results contain no pending tokens.
+- [x] **Step 1: Add failing access and deletion tests.** Save a report through analysis then `/save`, and assert `/open ID` returns identical body/evidence for its owner. Assert `saved_report is None` for another actor, revoked permissions, deleted IDs and unsafe stored content. Open a saved report after another analysis and assert `context.last_report` still identifies the latter. Two same-actor sessions should see newly saved reports but have distinct pending operations; updating/deleting a target through a second `ReportStore` must prevent an old preview from committing. Cover wrong operation ID, expired token, cancel and repeat-confirm with unchanged report count. Assert `not hasattr(session.pending_preview, 'token')` and recorded transcript results contain no pending tokens.
 
 ```python
 def test_open_report_preserves_the_latest_analysis(service):
@@ -138,10 +138,10 @@ def test_open_report_preserves_the_latest_analysis(service):
     assert service.context.last_report is latest
 ```
 
-- [ ] **Step 2: Run the affected new tests red.** Run `.venv/Scripts/python.exe -m pytest tests/test_service.py tests/test_security_integration.py tests/test_web_session.py -k 'open_report or preview or confirmation' -q`; inspect the intended missing-behavior failures.
-- [ ] **Step 3: Implement the narrow command and adapter methods.** Preserve store ownership/version/expiry transactions. Freeze targets only via existing preview commands; never use a button label, report title or model response as authorization. Superseding/resetting a preview cancels the old pending operation. After a terminal confirmation/cancellation hide its controls. Emit allowlisted read/preview/confirmation metadata, with no body or token. Add `/open` to CLI help and render the validated saved body and evidence.
-- [ ] **Step 4: Run `.venv/Scripts/python.exe -m pytest tests/test_reports.py tests/test_service.py tests/test_security_integration.py tests/test_web_session.py -q`.** Expect PASS for existing store semantics and new cross-session cases.
-- [ ] **Step 5: Commit.** Message: `feat: expose scoped report reads and web confirmation actions`.
+- [x] **Step 2: Run the affected new tests red.** Run `.venv/Scripts/python.exe -m pytest tests/test_service.py tests/test_security_integration.py tests/test_web_session.py -k 'open_report or preview or confirmation' -q`; inspect the intended missing-behavior failures.
+- [x] **Step 3: Implement the narrow command and adapter methods.** Preserve store ownership/version/expiry transactions. Freeze targets only via existing preview commands; never use a button label, report title or model response as authorization. Superseding/resetting a preview cancels the old pending operation. After a terminal confirmation/cancellation hide its controls. Emit allowlisted read/preview/confirmation metadata, with no body or token. Add `/open` to CLI help and render the validated saved body and evidence.
+- [x] **Step 4: Run `.venv/Scripts/python.exe -m pytest tests/test_reports.py tests/test_service.py tests/test_security_integration.py tests/test_web_session.py -q`.** Expect PASS for existing store semantics and new cross-session cases.
+- [x] **Step 5: Commit.** Message: `feat: expose scoped report reads and web confirmation actions`.
 
 ### Task 4: Deliver the runnable Streamlit chat with optional dependencies
 
@@ -152,8 +152,8 @@ def test_open_report_preserves_the_latest_analysis(service):
 - `st.session_state['retail_session']` holds one `WebSession`. Widget keys: `mode`, `actor_id`, `apply_session`, `new_conversation`, `question`, `example_comparison`.
 - Sidebar mode labels `Offline` and `Live`; actor text field defaults to `analyst_north`. Apply changes together through `apply_session`; invalid selection clears old displayed state and shows a safe setup error.
 
-- [ ] **Step 1: Prepare optional dependency resolution.** Add `ui = ['streamlit==1.65.0']`. Generate a separate lock containing `-r requirements-lock.txt` plus every additional pinned transitive package, resolving with the original lock as constraints. Planning dry-run already resolved this version successfully on Python 3.12; actual installation still needs validation. Keep original lock entries unchanged. Install the UI lock and editable package into the isolated execution environment; verify `pip check`.
-- [ ] **Step 2: Add failing AppTest checks with temporary runtime storage and fake live dependencies.** Use an absolute root entry-point path and `default_timeout=10`:
+- [x] **Step 1: Prepare optional dependency resolution.** Add `ui = ['streamlit==1.65.0']`. Generate a separate lock containing `-r requirements-lock.txt` plus every additional pinned transitive package, resolving with the original lock as constraints. Planning dry-run already resolved this version successfully on Python 3.12; actual installation still needs validation. Keep original lock entries unchanged. Install the UI lock and editable package into the isolated execution environment; verify `pip check`.
+- [x] **Step 2: Add failing AppTest checks with temporary runtime storage and fake live dependencies.** Use an absolute root entry-point path and `default_timeout=10`:
 
 ```python
 at = AppTest.from_file(str(repo_root / 'streamlit_app.py'), default_timeout=10).run()
@@ -170,10 +170,10 @@ assert len(at.session_state['retail_session'].transcript) == before
 Also assert a recording model/gateway receives zero calls on page load, sidebar application and ordinary reruns; an example click makes exactly one analysis. Missing live settings and fake provider failure produce a safe error, never `at.exception` or raw provider text. Two AppTest instances have independent conversations.
 
 Name the main test `test_chat_clarifies_and_reruns_without_resubmitting`; create its isolated environment with `monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))`. UI-dependent test modules use `pytest.importorskip('streamlit')` before importing UI modules, so the existing CLI-only development installation remains usable; UI-enabled CI must run these tests without skips. Override live dependencies in tests so local credentials cannot cause an accidental cloud call.
-- [ ] **Step 3: Run `.venv/Scripts/python.exe -m pytest tests/test_streamlit_ui.py -q`.** Expect absent entry point/widgets or conversation assertions to fail before UI implementation.
-- [ ] **Step 4: Implement the entry point and chat shell.** Use native chat widgets, sidebar form, example buttons, spinner, plain validated report rendering and evidence tables. Refresh access before rendering any retained state, halt safely on access failure, and sanitize submitted widget values before retaining them. Example, form and chat actions run only on their own submit event; display loops never call `submit`. Store no secrets in widget keys or callback arguments. Expose no API-key entry field and never auto-submit live example questions.
-- [ ] **Step 5: Verify UI tests and installation paths.** Run `tests/test_streamlit_ui.py` and `tests/test_service.py`. Update CI to install the UI lock, include both locks in the cache key, run the full suite with empty cloud credentials, and lint `streamlit_app.py` as well as `src tests`. README adds the exact installation/run commands while preserving the CLI-only path.
-- [ ] **Step 6: Commit.** Message: `feat: add optional Streamlit chat interface`.
+- [x] **Step 3: Run `.venv/Scripts/python.exe -m pytest tests/test_streamlit_ui.py -q`.** Expect absent entry point/widgets or conversation assertions to fail before UI implementation.
+- [x] **Step 4: Implement the entry point and chat shell.** Use native chat widgets, sidebar form, example buttons, spinner, plain validated report rendering and evidence tables. Refresh access before rendering any retained state, halt safely on access failure, and sanitize submitted widget values before retaining them. Example, form and chat actions run only on their own submit event; display loops never call `submit`. Store no secrets in widget keys or callback arguments. Expose no API-key entry field and never auto-submit live example questions.
+- [x] **Step 5: Verify UI tests and installation paths.** Run `tests/test_streamlit_ui.py` and `tests/test_service.py`. Update CI to install the UI lock, include both locks in the cache key, run the full suite with empty cloud credentials, and lint `streamlit_app.py` as well as `src tests`. README adds the exact installation/run commands while preserving the CLI-only path.
+- [x] **Step 6: Commit.** Message: `feat: add optional Streamlit chat interface`.
 
 ### Task 5: Add evidence charts and the saved-report library
 
@@ -186,7 +186,7 @@ Name the main test `test_chat_clarifies_and_reruns_without_resubmitting`; create
 - `render_result(result: TurnResult, *, key_prefix: str) -> None` and `render_report_library(session: WebSession) -> None` use only approved service outputs.
 - Widget keys: `save_title`, `save_report`, `report_id`, `open_report`, `delete_kind`, `delete_mention`, `preview_delete`, plus `confirm_delete:<operation_id>` and `cancel_delete:<operation_id>`; never use a token as a key.
 
-- [ ] **Step 1: Add failing data-shape and UI tests.** Table-drive `chart_data`: unsorted months become chronological with unchanged cell values; categorical labels produce a bar chart; empty/all-suppressed rows, absent metric, nonfinite values, duplicate x labels or multiple dimensions produce no chart. Assert ratio values are copied rather than summed. Test raw result count equal to `spec.limit` sets `limit_reached` even if suppression reduces visible rows. In AppTest save/open a report, then preview/cancel/delete it; reruns between those steps must preserve the report until the confirm click. Include conversation/mention/ID selection, literal wildcard mentions, duplicate titles, expired/stale/superseded previews, and a second session deleting an open report. Scan displayed text for the private token: assert absent.
+- [x] **Step 1: Add failing data-shape and UI tests.** Table-drive `chart_data`: unsorted months become chronological with unchanged cell values; categorical labels produce a bar chart; empty/all-suppressed rows, absent metric, nonfinite values, duplicate x labels or multiple dimensions produce no chart. Assert ratio values are copied rather than summed. Test raw result count equal to `spec.limit` sets `limit_reached` even if suppression reduces visible rows. In AppTest save/open a report, then preview/cancel/delete it; reruns between those steps must preserve the report until the confirm click. Include conversation/mention/ID selection, literal wildcard mentions, duplicate titles, expired/stale/superseded previews, and a second session deleting an open report. Scan displayed text for the private token: assert absent.
 
 ```python
 def test_chart_sorts_months_without_recalculating_ratios():
@@ -199,11 +199,11 @@ def test_chart_sorts_months_without_recalculating_ratios():
     assert chart.rows == list(reversed(evidence['rows']))
 ```
 
-- [ ] **Step 2: Run `.venv/Scripts/python.exe -m pytest tests/test_streamlit_views.py tests/test_streamlit_ui.py tests/test_service.py -q`.** Expect new view/metadata assertions to fail.
-- [ ] **Step 3: Implement evidence presentation.** Select the metric from returned columns, chart each evidence item independently, and always retain the table. Show periods, product scope, synthetic labels, suppression and a possible-truncation notice when `limit_reached` is true. Older saved evidence without this flag uses available `result_limit`, otherwise labels completeness as unknown. Use an expander for plans, evidence IDs and request ID. Render plain report Markdown with unsafe HTML disabled; treat titles as literal text.
-- [ ] **Step 4: Implement the library and frozen confirmation panel.** Read current accessible reports on every rerun; re-open the selected report through the service before display. Save only on the form submit; open/delete actions use IDs even when titles duplicate. Show every frozen target and expiry, then explicit confirm/cancel buttons tied to the operation ID. After a terminal outcome refresh the library and clear vanished selections. Token-bearing service results are never rendered or serialized wholesale.
-- [ ] **Step 5: Run view, UI, service and adapter modules.** Expect PASS, including the Task 2 access-revocation cases; ordinary rendering must not increment model/query/save counts.
-- [ ] **Step 6: Commit.** Message: `feat: present approved evidence and manage saved reports in Streamlit`.
+- [x] **Step 2: Run `.venv/Scripts/python.exe -m pytest tests/test_streamlit_views.py tests/test_streamlit_ui.py tests/test_service.py -q`.** Expect new view/metadata assertions to fail.
+- [x] **Step 3: Implement evidence presentation.** Select the metric from returned columns, chart each evidence item independently, and always retain the table. Show periods, product scope, synthetic labels, suppression and a possible-truncation notice when `limit_reached` is true. Older saved evidence without this flag uses available `result_limit`, otherwise labels completeness as unknown. Use an expander for plans, evidence IDs and request ID. Render plain report Markdown with unsafe HTML disabled; treat titles as literal text.
+- [x] **Step 4: Implement the library and frozen confirmation panel.** Read current accessible reports on every rerun; re-open the selected report through the service before display. Save only on the form submit; open/delete actions use IDs even when titles duplicate. Show every frozen target and expiry, then explicit confirm/cancel buttons tied to the operation ID. After a terminal outcome refresh the library and clear vanished selections. Token-bearing service results are never rendered or serialized wholesale.
+- [x] **Step 5: Run view, UI, service and adapter modules.** Expect PASS, including the Task 2 access-revocation cases; ordinary rendering must not increment model/query/save counts.
+- [x] **Step 6: Commit.** Message: `feat: present approved evidence and manage saved reports in Streamlit`.
 
 ### Task 6: Verify the full demonstration and document actual results
 
@@ -211,11 +211,11 @@ def test_chart_sorts_months_without_recalculating_ratios():
 
 **Interfaces:** Consumes the entry point, CLI, locked installation and behaviors delivered by Tasks 1-5. Produces documented commands and recorded validation outcomes; no new application interface.
 
-- [ ] **Step 1: Diagnose the existing deadline test using `systematic-debugging`.** Reproduce `test_active_job_cancellation_and_remaining_rpc_timeout`. Its observed failure was `0.1000000000003638 <= 0.1`, caused by floating-point subtraction with an effectively unchanged clock sample. Establish this cause before editing. Replace real-time timing in this specific test with a monkeypatched `retail_agent.gateways.time.monotonic`; set a deadline of `100.125` and clock values `100.0`, `100.0625`, `100.125`. Assert exact remaining limits `0.125`, `0.0625`, then `QueryTimeout`; retain the active-job cancellation assertions. Do not alter production timeout behavior or add sleeps/tolerance that hide it.
-- [ ] **Step 2: Run that focused test.** Run `.venv/Scripts/python.exe -m pytest tests/test_analytics.py::test_active_job_cancellation_and_remaining_rpc_timeout -q`; expect PASS. Commit this isolated change as `test: make query deadline checks deterministic`.
-- [ ] **Step 3: Run final automated checks once on the integrated change.** Run `.venv/Scripts/python.exe -m pytest -q`, `.venv/Scripts/python.exe -m ruff check src tests streamlit_app.py`, `.venv/Scripts/python.exe -m pip check` and `git diff --check`. Expect all tests/checks to pass, with zero skipped UI tests in the UI-enabled CI environment. If changes follow a failure, rerun affected checks before claiming success.
-- [ ] **Step 4: Verify installation and inspect the actual UI.** Reproduce README installation in a fresh ignored environment and launch a local, loopback-only Streamlit server. Use the browser tools for the offline sequence: comparison, follow-up, save/open, customer ranking and breakdown, PII refusal, cancel, confirmed deletion, new conversation and actor switch. Verify readable tables, literal titles, complete previews, visible offline mode and no stale content after a scope change. Stop the test server afterward. No real cloud calls are necessary.
-- [ ] **Step 5: Update documentation with measured results.** Add the optional UI to the architecture diagram; explain session reset/disconnect, shared saved reports for the same actor and local-only demo identity. Record actual counts, platform, UI walkthrough and remaining semantic/SQL-limit findings in evaluation. Update the spec/plan to reflect completed work only. Commit as `docs: document and verify the Streamlit demonstration`.
+- [x] **Step 1: Diagnose the existing deadline test using `systematic-debugging`.** Reproduce `test_active_job_cancellation_and_remaining_rpc_timeout`. Its observed failure was `0.1000000000003638 <= 0.1`, caused by floating-point subtraction with an effectively unchanged clock sample. Establish this cause before editing. Replace real-time timing in this specific test with a monkeypatched `retail_agent.gateways.time.monotonic`; set a deadline of `100.125` and clock values `100.0`, `100.0625`, `100.125`. Assert exact remaining limits `0.125`, `0.0625`, then `QueryTimeout`; retain the active-job cancellation assertions. Do not alter production timeout behavior or add sleeps/tolerance that hide it.
+- [x] **Step 2: Run that focused test.** Run `.venv/Scripts/python.exe -m pytest tests/test_analytics.py::test_active_job_cancellation_and_remaining_rpc_timeout -q`; expect PASS. Commit this isolated change as `test: make query deadline checks deterministic`.
+- [x] **Step 3: Run final automated checks once on the integrated change.** Run `.venv/Scripts/python.exe -m pytest -q`, `.venv/Scripts/python.exe -m ruff check src tests streamlit_app.py`, `.venv/Scripts/python.exe -m pip check` and `git diff --check`. Expect all tests/checks to pass, with zero skipped UI tests in the UI-enabled CI environment. If changes follow a failure, rerun affected checks before claiming success.
+- [x] **Step 4: Verify installation and inspect the actual UI.** Reproduce README installation in a fresh ignored environment and launch a local, loopback-only Streamlit server. Use the browser tools for the offline sequence: comparison, follow-up, save/open, customer ranking and breakdown, PII refusal, cancel, confirmed deletion, new conversation and actor switch. Verify readable tables, literal titles, complete previews, visible offline mode and no stale content after a scope change. Stop the test server afterward. No real cloud calls are necessary.
+- [x] **Step 5: Update documentation with measured results.** Add the optional UI to the architecture diagram; explain session reset/disconnect, shared saved reports for the same actor and local-only demo identity. Record actual counts, platform, UI walkthrough and remaining semantic/SQL-limit findings in evaluation. Update the spec/plan to reflect completed work only. Commit as `docs: document and verify the Streamlit demonstration`.
 - [ ] **Step 6: Obtain the final code review and hand off.** Follow the selected execution skill and `requesting-code-review`/`verification-before-completion`. Address actionable findings, then report changed behavior, exact checks and limitations. Publishing, pushing or merging is not part of this plan.
 
 ## Planning evidence and references
@@ -231,6 +231,8 @@ def test_chart_sorts_months_without_recalculating_ratios():
 - [x] Interface names and types checked across tasks; no service-side Streamlit dependency or persistent SQLite connection.
 - [x] Each Review Focus item is assigned explicit behavioral tests; no placeholder implementation steps.
 - [x] Documentation and setup are attached to their deliverables; changes outside the approved UI/clarification scope are excluded except the diagnosed pre-existing test failure.
-- [ ] User reviews this plan and selects Native or Subagent-driven execution.
+- [x] User reviews this plan and selects Native execution.
 
 Recommended execution: **Native**, with one final independent review. The six tasks share service/session interfaces and form a mostly sequential integration; implementing them in this chat avoids repeated context transfer while retaining a separate final review.
+
+Execution note: clarification regressions are grouped in `tests/test_clarifications.py`; the deterministic deadline-test repair was advanced before Task 1 completion to establish reliable verification. Production timeout logic was unchanged.

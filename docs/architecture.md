@@ -6,7 +6,7 @@ The assistant translates retail questions into bounded analyses and explains com
 
 ## Prototype scope
 
-The local prototype implements analysis, owned-report confirmation, bounded failures and correlated metadata in a CLI. Numerical and adversarial tests check these behaviors. Golden retrieval, preference learning and persona administration remain HLD-only, alongside production authentication, hosting and future tools. Session context supports follow-ups without claiming preference learning.
+The local prototype implements analysis, owned-report confirmation, bounded failures and correlated metadata in a CLI and an optional Streamlit interface. Numerical, adversarial and Streamlit AppTest checks cover these behaviors. Golden retrieval, preference learning and persona administration remain HLD-only, alongside production authentication, hosting and future tools. Session context supports follow-ups without claiming preference learning.
 
 The live gateway queries configured tables in `bigquery-public-data.thelook_ecommerce`, validating required schema fields and location before execution. The four required schemas, US location and a scoped all-time analysis were verified live; all six metrics matched independent SQL. Live follow-ups and multi-query comparisons remain to be validated. SQLite holds report ownership and pending confirmations; sanitized conversation state remains in application memory. Each ADK model stage uses an ephemeral session with approved context. Rich handles presentation. Application policy controls every operation.
 
@@ -14,6 +14,9 @@ The live gateway queries configured tables in `bigquery-public-data.thelook_ecom
 flowchart LR
     U["Demo user"] --> CLI["Rich CLI"]
     CLI --> APP["Application: actor and policy"]
+    U --> WEB["Streamlit: chat, evidence, reports"]
+    WEB --> SESSION["Per-browser WebSession"]
+    SESSION --> APP
     APP --> P["ADK planning graph: Gemini then validation"]
     P --> APP
     APP --> Q["Validated plan and SQL compiler"]
@@ -27,6 +30,28 @@ flowchart LR
     APP --> T["Redacted events"]
     R --> T
 ```
+
+## Local browser lifecycle
+
+Streamlit is an optional presentation layer. `WebSession` retains one conversation, model,
+gateway and sanitized transcript in browser session state; no global resource cache holds
+these mutable objects. The CLI and UI share `build_runtime`. Each synchronous web action
+opens its own SQLite store, runs the application service and closes the connection on the
+calling thread. No event loop or SQLite connection is retained across reruns.
+
+The sidebar applies actor and mode together. New conversation, mode/actor changes and
+changed permissions clear analytical context, customer linkage and pending confirmation.
+Missing or invalid permissions fail closed before prior evidence is rendered. Browser
+reconnection does not promise conversation recovery. SQLite reports survive, and local
+sessions with the same actor/mode see the same accessible reports, including those saved
+from the CLI. An open report is read again on each rerun; a deleted or revoked report is
+not served from a browser cache. Demo actors remain policy fixtures, not authentication.
+
+Graphs copy a single approved metric from a single evidence item. Month series are sorted
+chronologically; categorical dimensions use bars. Ratios are not summed, and multiple
+dimensions fall back to a table. Periods, product scope, synthetic data, privacy suppression
+and possible row truncation are visible. Confirmation buttons send the private session
+token through the existing service and never expose it in widget labels or keys.
 
 ## Analysis workflow
 
@@ -52,7 +77,7 @@ A selectable local actor demonstrates authorization rules, not authentication. S
 
 Store owner, conversation, content, evidence references and version. Support owned-report selection by literal mention or current conversation. Resolve ambiguity before preview.
 
-Preview exact titles/count and freeze IDs/versions in an expiring pending operation. Require a distinct confirmation identifier through the CLI, outside model control. Recheck actor, ownership, versions, expiry and unused state transactionally; delete only those targets and consume confirmation atomically. Changed targets require a new preview. New reports created after preview survive. Cancel, expiry and no-match leave reports unchanged; replay returns the recorded outcome. Audit metadata must not retain deleted content.
+Preview exact titles/count and freeze IDs/versions in an expiring pending operation. Require a distinct confirmation identifier through the CLI, or an explicit Streamlit confirmation button using the private session token, outside model control. Recheck actor, ownership, versions, expiry and unused state transactionally; delete only those targets and consume confirmation atomically. Changed targets require a new preview. New reports created after preview survive. Cancel, expiry and no-match leave reports unchanged; replay returns the recorded outcome. Audit metadata must not retain deleted content.
 
 Keep this approval transaction in an application service independent of ADK session state. ADK 2.11.0 adds workflow tool confirmation, while its confirmation documentation still describes experimental support and session-service limitations. Native confirmation can be evaluated later without changing the report-ownership boundary. [ADK 2.11.0 release notes](https://github.com/google/adk-python/releases/tag/v2.11.0), [confirmation documentation](https://adk.dev/tools-custom/confirmation/).
 
