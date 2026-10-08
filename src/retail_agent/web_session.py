@@ -8,7 +8,7 @@ from typing import Literal
 
 from .analytics import ActorScope
 from .config import ConfigurationError, Settings, resolve_scope
-from .reports import ReportStore
+from .reports import ReportStore, ReportTarget
 from .runtime import build_runtime
 from .safety import privacy_refusal, sanitize_input
 from .service import AnalyticsService, Conversation, TurnResult
@@ -18,6 +18,13 @@ from .service import AnalyticsService, Conversation, TurnResult
 class TranscriptTurn:
     question: str
     result: TurnResult
+
+
+@dataclass(frozen=True)
+class DeletionPreview:
+    operation_id: str
+    targets: tuple[ReportTarget, ...]
+    expires_at: float
 
 
 class WebSession:
@@ -117,6 +124,8 @@ class WebSession:
             with self._store() as store:
                 result = asyncio.run(self._service(store).handle(text))
             self._issued_tokens.update(self.context.confirmation_tokens)
+            if result.deletion_status in ("deleted", "cancelled", "expired", "stale"):
+                self.context.pending = None
             if self.refresh_access() != initial_scope:
                 result = TurnResult("Product permissions changed. Please run a fresh analysis.")
             if record:
@@ -144,3 +153,33 @@ class WebSession:
         if not command.strip().startswith("/"):
             raise ValueError("The command channel accepts slash commands only.")
         return self._execute(command, record=False)
+
+    def list_reports(self) -> list[dict[str, str]]:
+        return self.run_command("/reports").reports
+
+    def open_report(self, report_id: str) -> TurnResult:
+        return self.run_command(f"/open {report_id}")
+
+    @property
+    def pending_preview(self) -> DeletionPreview | None:
+        self.refresh_access()
+        pending = self.context.pending
+        if pending and pending.operation_id and pending.expires_at is not None:
+            return DeletionPreview(pending.operation_id, pending.targets, pending.expires_at)
+        return None
+
+    def confirm_delete(self, operation_id: str) -> TurnResult:
+        with self._lock:
+            self.refresh_access()
+            pending = self.context.pending
+            if not pending or pending.operation_id != operation_id:
+                return TurnResult("This preview is no longer active. Preview the selection again.")
+            return self.run_command(f"/confirm {pending.token}")
+
+    def cancel_delete(self, operation_id: str) -> TurnResult:
+        with self._lock:
+            self.refresh_access()
+            pending = self.context.pending
+            if not pending or pending.operation_id != operation_id:
+                return TurnResult("This preview is no longer active. Preview the selection again.")
+            return self.run_command("/cancel")

@@ -25,6 +25,7 @@ Customer ranking: Top 5 customers by spending in 2025.
 Customer follow-up: Break down cust_FROM_THE_RESULTS by month.
 /save TITLE                 Save the last grounded report
 /reports                    List your accessible saved reports
+/open REPORT_ID             Read an accessible saved report
 /delete conversation        Preview this conversation's reports
 /delete mention TEXT        Preview reports with a literal mention
 /delete id REPORT_ID        Preview a specific owned report
@@ -41,6 +42,9 @@ def present(console: Console, result: TurnResult, show_plan: bool = False) -> No
     console.print(result.message, markup=False)
     if result.report:
         console.print(Markdown(result.report.to_markdown()))
+    if result.saved_report:
+        console.print(result.saved_report.title, markup=False)
+        console.print(Markdown(result.saved_report.body))
     if result.catalog:
         table = Table("Table", "Approved columns")
         for name, columns in result.catalog.items():

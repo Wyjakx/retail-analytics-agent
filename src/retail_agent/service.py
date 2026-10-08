@@ -20,7 +20,7 @@ from .analytics import (
 from .config import ConfigurationError, Settings
 from .gateways import QueryBudget
 from .model import AnalystReport, AnalyticalModel, deterministic_report, starts_new_request
-from .reports import InvalidConfirmationError, PendingDeletion, ReportStore, ReportStoreError
+from .reports import InvalidConfirmationError, PendingDeletion, Report, ReportStore, ReportStoreError
 from .safety import (
     UnsafeOutput, privacy_refusal, sanitize_input, validate_evidence, validate_report, validate_text,
 )
@@ -53,6 +53,8 @@ class TurnResult:
     reports: list[dict[str, str]] = field(default_factory=list)
     catalog: dict[str, list[str]] | None = None
     request_id: str = ""
+    saved_report: Report | None = None
+    deletion_status: str | None = None
 
 
 class AnalyticsService:
@@ -410,6 +412,21 @@ class AnalyticsService:
                 {"id": report.report_id, "title": report.title, "conversation": report.conversation_id}
                 for report in reports
             ])
+        open_report = re.fullmatch(r"/open\s+([a-f0-9]{32})", text, re.I)
+        if open_report:
+            matches = [report for report in self._eligible_reports(scope)
+                       if report.report_id == open_report.group(1).lower()]
+            if not matches:
+                return TurnResult("Report unavailable within current product permissions.")
+            report = matches[0]
+            validate_text(report.body)
+            queries = report.evidence.get("queries")
+            if not isinstance(queries, list):
+                raise UnsafeOutput("Saved evidence is invalid.")
+            validate_evidence(queries)
+            self.traces.event(stage="open_report", status="completed",
+                              report_id=report.report_id, **common)
+            return TurnResult("Saved report.", saved_report=report, evidence=queries)
         if lower.startswith("/confirm"):
             parts = text.split(maxsplit=1)
             pending = self.context.pending
@@ -418,7 +435,7 @@ class AnalyticsService:
             outcome = self.reports.confirm_delete(scope.actor_id, pending.operation_id, parts[1])
             self.traces.event(stage="delete_report", status=outcome.status,
                               operation_id=outcome.operation_id, **common)
-            return TurnResult(outcome.message)
+            return TurnResult(outcome.message, deletion_status=outcome.status)
         if lower in ("/cancel", "cancel deletion"):
             pending = self.context.pending
             if pending is None or pending.operation_id is None:
@@ -426,7 +443,7 @@ class AnalyticsService:
             outcome = self.reports.cancel_delete(scope.actor_id, pending.operation_id)
             self.traces.event(stage="delete_report", status=outcome.status,
                               operation_id=outcome.operation_id, **common)
-            return TurnResult(outcome.message)
+            return TurnResult(outcome.message, deletion_status=outcome.status)
         conversation_delete = lower == "/delete conversation" or bool(re.fullmatch(
             r"delete all (?:the )?reports (?:we made )?in this conversation", lower,
         ))
@@ -445,6 +462,9 @@ class AnalyticsService:
                 matches = [report for report in matches if report.report_id == id_delete.group(1)]
             if not matches:
                 return TurnResult("No matching owned reports within current product permissions.")
+            previous = self.context.pending
+            if previous and previous.operation_id:
+                self.reports.cancel_delete(scope.actor_id, previous.operation_id)
             pending = self.reports.preview_delete(scope.actor_id, report_ids=[r.report_id for r in matches])
             self.context.pending = pending
             if pending.token:

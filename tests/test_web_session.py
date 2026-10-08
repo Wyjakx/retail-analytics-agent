@@ -161,3 +161,95 @@ def test_overlapping_calls_do_not_clear_the_running_operation_flag(session):
             release.set()
         assert future.result().report
     assert not session.busy
+
+
+def saved_id(session, title="Original"):
+    session.submit("Show revenue in 2025")
+    session.run_command(f"/save {title}")
+    return session.run_command("/reports").reports[-1]["id"]
+
+
+def test_open_report_preserves_latest_analysis_and_rechecks_owner(tmp_path):
+    session = WebSession(settings=Settings(data_dir=tmp_path))
+    report_id = saved_id(session)
+    latest = session.submit("Show units in 2025").report
+    opened = session.open_report(report_id)
+    assert opened.saved_report.title == "Original"
+    assert opened.saved_report.evidence["product_ids"] == [1, 2]
+    assert session.context.last_report is latest
+    south = WebSession("analyst_south", settings=Settings(data_dir=tmp_path))
+    missing = session.open_report("0" * 32)
+    foreign = south.open_report(report_id)
+    assert foreign.saved_report is None and missing.saved_report is None
+    assert foreign.message == missing.message
+
+
+@pytest.mark.parametrize("change", ["revoke", "delete", "unsafe"])
+def test_open_report_rejects_revoked_deleted_and_unsafe_content(tmp_path, change):
+    path = tmp_path / "policy.json"
+    path.write_text('{"analyst_north": [1, 2]}', encoding="utf-8")
+    session = WebSession(settings=Settings(data_dir=tmp_path, permissions_file=path))
+    report_id = saved_id(session)
+    if change == "revoke":
+        path.write_text('{"analyst_north": [1]}', encoding="utf-8")
+    else:
+        with session._store() as store:
+            if change == "delete":
+                pending = store.preview_delete("analyst_north", report_ids=[report_id])
+                store.confirm_delete("analyst_north", pending.operation_id, pending.token)
+            else:
+                store.update("analyst_north", report_id, body="Contact bob@example.org")
+    result = session.open_report(report_id)
+    assert result.saved_report is None
+    assert "bob@example.org" not in result.message
+
+
+def test_public_preview_and_confirmation_are_bound_to_current_operation(session):
+    report_id = saved_id(session)
+    session.run_command(f"/delete id {report_id}")
+    preview = session.pending_preview
+    assert not hasattr(preview, "token")
+    assert "Deleted" not in session.confirm_delete("wrong-operation").message
+    assert len(session.list_reports()) == 1
+    assert "Deleted 1" in session.confirm_delete(preview.operation_id).message
+    assert session.pending_preview is None
+    session.confirm_delete(preview.operation_id)
+    assert session.list_reports() == []
+
+
+@pytest.mark.parametrize("outcome", ["cancel", "expiry", "stale", "deleted"])
+def test_preview_handles_terminal_outcomes_with_another_store(session, monkeypatch, outcome):
+    clock = [1000.0]
+    path = session.runtime.settings.data_dir / "reports.sqlite3"
+    monkeypatch.setattr(session, "_store", lambda: ReportStore(path, now=lambda: clock[0]))
+    report_id = saved_id(session)
+    session.run_command("/delete conversation")
+    preview = session.pending_preview
+    if outcome == "cancel":
+        result = session.cancel_delete(preview.operation_id)
+        assert "cancelled" in result.message
+    else:
+        if outcome == "expiry":
+            clock[0] += 301
+        elif outcome in ("stale", "deleted"):
+            with ReportStore(path) as other:
+                if outcome == "stale":
+                    other.update("analyst_north", report_id, title="Changed")
+                else:
+                    pending = other.preview_delete("analyst_north", report_ids=[report_id])
+                    other.confirm_delete("analyst_north", pending.operation_id, pending.token)
+        result = session.confirm_delete(preview.operation_id)
+        assert "Deleted" not in result.message
+    assert session.pending_preview is None
+    assert len(session.list_reports()) == (0 if outcome == "deleted" else 1)
+
+
+def test_superseding_preview_cancels_old_selection(session):
+    saved_id(session)
+    first = session.run_command("/delete conversation").pending
+    session.run_command("/delete mention Original")
+    assert session.pending_preview.operation_id != first.operation_id
+    with session._store() as store:
+        assert store.confirm_delete("analyst_north", first.operation_id, first.token).status == "cancelled"
+    session.confirm_delete(first.operation_id)
+    assert len(session.list_reports()) == 1
