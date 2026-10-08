@@ -1,6 +1,6 @@
 # Streamlit interface for the retail analytics prototype
 
-Status: proposed design, awaiting review of this written specification.
+Status: approved by the user on 8 October 2026; [implementation plan](../plans/2026-10-08-streamlit-interface.md) prepared and awaiting review/execution-method selection.
 
 ## Purpose and agreed scope
 
@@ -87,6 +87,7 @@ Document offline and live startup, session lifetime, demo identity limitations, 
 - [x] Classify the new web interface as an architectural addition.
 - [x] Carry the discussed minimal scope into this written design and compare implementation approaches.
 - [x] Review this specification for scope, contradictions and unresolved placeholders.
-- [ ] Obtain user review of the written specification.
-- [ ] Use `writing-plans` to prepare the implementation plan, then review the plan and select execution method.
+- [x] Obtain user review of the written specification.
+- [x] Prepare the implementation plan using `writing-plans`.
+- [ ] Obtain plan review and select the execution method.
 - [ ] Implement with regression tests, code review and final verification.
