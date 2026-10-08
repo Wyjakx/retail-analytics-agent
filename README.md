@@ -88,6 +88,23 @@ The demo uses two queries for the monthly comparison, follows up by product, sav
 
 Natural-language deletion also accepts `Delete all reports mentioning Client X` and `Delete all the reports we made in this conversation`. A plain `yes` cannot execute deletion. The model never receives report confirmation tokens; the CLI handles them separately.
 
+## Optional Streamlit interface
+
+Install the separate UI lock into the same environment, then launch from the repository:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-ui-lock.txt
+.\.venv\Scripts\python.exe -m pip install --no-deps -e .
+.\.venv\Scripts\python.exe -m streamlit run streamlit_app.py
+```
+
+Open the local URL printed by Streamlit. Offline is selected by default and uses synthetic
+data. Ask `Show revenue by product`, then answer `2025` when prompted. The sidebar applies
+actor and mode changes together and starts a fresh conversation. Live uses the configuration
+below and only submits an analysis when you send a question or click an example.
+The original CLI installation remains valid without Streamlit; UI tests are skipped when
+that optional dependency is absent. CI installs the UI lock to exercise both interfaces.
+
 ## Live Gemini and BigQuery
 
 Copy `.env.example` to an ignored `.env` and set `GOOGLE_API_KEY`, `GEMINI_MODEL` and `GOOGLE_CLOUD_PROJECT`. Choose a Gemini model available to your account from the [official model list](https://ai.google.dev/gemini-api/docs/models); the recorded smoke test used `gemini-3.5-flash-lite`. BigQuery also needs application-default credentials and query-job permission on the execution project. With the Google Cloud CLI installed, configure ADC yourself:

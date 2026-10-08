@@ -1,0 +1,150 @@
+from pathlib import Path
+from dataclasses import replace
+
+import pytest
+
+pytest.importorskip("streamlit")
+from streamlit.testing.v1 import AppTest
+
+from retail_agent.config import Settings
+from retail_agent.gateways import OfflineGateway
+from retail_agent.model import OfflineModel
+from retail_agent import runtime
+
+
+APP = Path(__file__).resolve().parents[1] / "streamlit_app.py"
+
+
+@pytest.fixture(autouse=True)
+def isolated_ui(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    for name in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GEMINI_MODEL",
+                 "PRODUCT_PERMISSIONS_FILE", "CUSTOMER_PSEUDONYM_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    load = Settings.load
+    monkeypatch.setattr(Settings, "load", classmethod(lambda cls: load(env_file=None)))
+
+
+def app():
+    return AppTest.from_file(str(APP), default_timeout=10).run()
+
+
+def test_chat_clarifies_and_reruns_without_resubmitting(monkeypatch):
+    calls = []
+    execute = OfflineGateway.execute
+
+    def record(self, *args):
+        calls.append(args)
+        return execute(self, *args)
+
+    monkeypatch.setattr(OfflineGateway, "execute", record)
+    at = app()
+    assert not at.exception
+    assert at.radio(key="mode").value == "Offline"
+    assert not calls
+    at.chat_input(key="question").set_value("Show revenue by product").run()
+    assert not calls
+    at.chat_input(key="question").set_value("2025").run()
+    assert len(at.dataframe) >= 1
+    assert len(calls) == 1
+    before = len(at.session_state["retail_session"].transcript)
+    at.run()
+    assert len(at.session_state["retail_session"].transcript) == before
+    assert len(calls) == 1
+    assert not at.exception
+
+
+def test_example_runs_once_and_apply_does_not_plan(monkeypatch):
+    calls = []
+    plan = OfflineModel.plan
+
+    async def record(self, *args, **kwargs):
+        calls.append(args)
+        return await plan(self, *args, **kwargs)
+
+    monkeypatch.setattr(OfflineModel, "plan", record)
+    at = app()
+    at.button(key="apply_session").click().run()
+    at.run()
+    assert calls == []
+    at.button(key="example_comparison").click().run()
+    at.run()
+    assert len(calls) == 1
+    assert len(at.session_state["retail_session"].transcript) == 1
+    assert not at.exception
+
+
+def test_live_setup_failure_and_provider_failure_are_safe(monkeypatch):
+    at = app()
+    at.radio(key="mode").set_value("Live")
+    at.button(key="apply_session").click().run()
+    assert at.error and not at.exception
+    assert not at.session_state["retail_session"].transcript
+    at.radio(key="mode").set_value("Offline")
+    at.button(key="apply_session").click().run()
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("PRIVATE_PROVIDER_DETAILS")
+
+    monkeypatch.setattr(OfflineModel, "plan", fail)
+    at.chat_input(key="question").set_value("Show revenue in 2025").run()
+    assert not at.exception
+    assert "PRIVATE_PROVIDER_DETAILS" not in str(at)
+
+
+def test_applying_configured_live_mode_does_not_invoke_provider(monkeypatch):
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key-for-construction-only")
+    load = Settings.load
+    monkeypatch.setattr(Settings, "load", classmethod(
+        lambda cls: replace(load(), project="test-project", model="fake-model")
+    ))
+
+    class LazyProvider:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __getattr__(self, name):
+            pytest.fail(f"Provider invoked during setup: {name}")
+
+    monkeypatch.setattr(runtime, "GeminiModel", LazyProvider)
+    monkeypatch.setattr(runtime, "BigQueryGateway", LazyProvider)
+    at = app()
+    at.radio(key="mode").set_value("Live")
+    at.button(key="apply_session").click().run()
+    at.run()
+    assert at.session_state["retail_session"].mode == "live"
+    assert not at.exception and not at.error
+
+
+def test_browser_sessions_and_reset_are_independent():
+    first, second = app(), app()
+    first.chat_input(key="question").set_value("Show revenue in 2025").run()
+    assert first.session_state["retail_session"].transcript
+    assert not second.session_state["retail_session"].transcript
+    first.button(key="new_conversation").click().run()
+    assert not first.session_state["retail_session"].transcript
+    assert not first.exception
+
+
+def test_permission_revocation_hides_retained_results(tmp_path, monkeypatch):
+    policy = tmp_path / "policy.json"
+    policy.write_text('{"analyst_north": [1, 2]}', encoding="utf-8")
+    monkeypatch.setenv("PRODUCT_PERMISSIONS_FILE", str(policy))
+    at = app()
+    at.chat_input(key="question").set_value("Show revenue in 2025").run()
+    assert at.dataframe
+    policy.write_text("{}", encoding="utf-8")
+    at.run()
+    assert not at.dataframe
+    assert not at.chat_message
+    assert at.error and not at.exception
+
+
+def test_raw_input_is_not_retained_in_widget_or_transcript(monkeypatch):
+    secret = "synthetic-private-key-value"
+    monkeypatch.setenv("GOOGLE_API_KEY", secret)
+    at = app()
+    at.chat_input(key="question").set_value(f"Show revenue in 2025 {secret}").run()
+    assert secret not in str(at)
+    assert secret not in str(at.session_state["question"])
+    assert secret not in repr(at.session_state["retail_session"].transcript)
