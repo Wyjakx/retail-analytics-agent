@@ -3,6 +3,7 @@
 import streamlit as st
 
 from .web_session import WebSession
+from .streamlit_views import render_report_library, render_result
 
 
 EXAMPLE = "Compare revenue and spend per customer by state in January versus February 2025"
@@ -36,7 +37,9 @@ def _submit(question: str) -> None:
     st.session_state.pop("action_error", None)
     try:
         with st.spinner("Analysing authorized data…"):
-            st.session_state.retail_session.submit(question)
+            result = st.session_state.retail_session.submit(question)
+            if result.saved_report:
+                st.session_state.opened_report_id = result.saved_report.report_id
     except Exception:
         st.session_state.action_error = ACTION_ERROR
 
@@ -88,14 +91,23 @@ def main() -> None:
     st.button("Compare January and February 2025", key="example_comparison",
               on_click=_submit, args=(EXAMPLE,), disabled=session.busy)
 
-    for turn in session.transcript:
-        with st.chat_message("user"):
-            st.text(turn.question)
-        with st.chat_message("assistant"):
-            st.text(turn.result.message)
-            if turn.result.report:
-                st.markdown(turn.result.report.to_markdown(), unsafe_allow_html=False)
-            for evidence in turn.result.evidence:
-                st.dataframe(evidence["rows"], hide_index=True)
-    st.chat_input("Ask about revenue, orders or customers…", key="question",
-                  on_submit=_on_question, disabled=session.busy)
+    chat, library = st.tabs(["Conversation", "Report library"])
+    with library:
+        try:
+            render_report_library(session)
+        except Exception:
+            st.error("The report library is unavailable. Check local storage and permissions.")
+    # Library reads also refresh access; do not render retained chat after a revocation.
+    try:
+        session.refresh_access()
+    except Exception:
+        st.error(SETUP_ERROR)
+        st.stop()
+    with chat:
+        for index, turn in enumerate(session.transcript):
+            with st.chat_message("user"):
+                st.text(turn.question)
+            with st.chat_message("assistant"):
+                render_result(turn.result, key_prefix=f"chat:{session.revision}:{index}")
+        st.chat_input("Ask about revenue, orders or customers…", key="question",
+                      on_submit=_on_question, disabled=session.busy)

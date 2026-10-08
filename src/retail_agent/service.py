@@ -278,6 +278,8 @@ class AnalyticsService:
                 raw_empty = not outcome.rows
                 approved = outcome.approve_for_model(spec, self.settings.min_group_customers)
                 item = {**approved.to_dict(), "query_index": index,
+                        "result_limit": spec.limit, "limit_reached": len(outcome.rows) >= spec.limit,
+                        "product_ids": list(permitted_products(spec, scope)),
                         "period": {"start": str(spec.start_date) if spec.start_date else None,
                                    "end_exclusive": str(spec.end_date) if spec.end_date else None}}
                 evidence.append(item)

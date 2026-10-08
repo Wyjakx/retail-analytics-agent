@@ -35,6 +35,16 @@ def test_reports_are_shared_only_with_same_actor(tmp_path):
     assert b.transcript == []
 
 
+def test_chat_open_does_not_cache_saved_body_or_evidence(session):
+    session.submit("Show revenue in 2025")
+    session.run_command("/save Shared")
+    report_id = session.list_reports()[0]["id"]
+    result = session.submit(f"/open {report_id}")
+    assert result.saved_report
+    retained = session.transcript[-1].result
+    assert retained.saved_report is None and retained.evidence == []
+
+
 def test_sqlite_store_is_owned_by_each_calling_thread(session):
     with ThreadPoolExecutor(max_workers=1) as worker:
         assert worker.submit(session.submit, "Show revenue in 2025").result().report

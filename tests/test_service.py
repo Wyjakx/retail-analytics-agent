@@ -61,6 +61,28 @@ def test_no_date_is_clarified_schema_is_available_and_unrelated_is_refused(servi
     assert ask(service, "Write a romantic poem").report is None
 
 
+def test_result_cap_uses_rows_before_small_group_suppression(service):
+    class LimitedModel(OfflineModel):
+        async def plan(self, *args, **kwargs):
+            return Decision(action="analysis", plan=AnalysisPlan(queries=[
+                QuerySpec(metrics=["revenue"], dimensions=["state"], limit=2),
+            ]))
+
+    class LimitedGateway(OfflineGateway):
+        def execute(self, spec, scope, budget):
+            return QueryOutcome([
+                {"state": "TX", "revenue": 100.0, "group_customer_count": 5},
+                {"state": "CA", "revenue": 200.0, "group_customer_count": 1},
+            ], ["state", "revenue", "group_customer_count"], "ev-limit", {}, True)
+
+    service.model, service.gateway = LimitedModel(), LimitedGateway()
+    result = ask(service, "Show revenue by state all time")
+    assert result.report
+    assert result.evidence[0]["result_limit"] == 2
+    assert result.evidence[0]["limit_reached"] is True
+    assert result.evidence[0]["rows"] == [{"state": "TX", "revenue": 100.0}]
+
+
 class EmptyGateway(OfflineGateway):
     def __init__(self):
         super().__init__()

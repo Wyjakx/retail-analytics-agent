@@ -10,6 +10,7 @@ from retail_agent.config import Settings
 from retail_agent.gateways import OfflineGateway
 from retail_agent.model import OfflineModel
 from retail_agent import runtime
+from retail_agent.reports import ReportStore
 
 
 APP = Path(__file__).resolve().parents[1] / "streamlit_app.py"
@@ -103,6 +104,9 @@ def test_applying_configured_live_mode_does_not_invoke_provider(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
+        def begin_turn(self, **kwargs):
+            pass  # Local counter reset, not a provider request.
+
         def __getattr__(self, name):
             pytest.fail(f"Provider invoked during setup: {name}")
 
@@ -148,3 +152,90 @@ def test_raw_input_is_not_retained_in_widget_or_transcript(monkeypatch):
     assert secret not in str(at)
     assert secret not in str(at.session_state["question"])
     assert secret not in repr(at.session_state["retail_session"].transcript)
+
+
+def save_report(at, title="Quarterly review"):
+    at.text_input(key="save_title").set_value(title)
+    at.button(key="save_report").click().run()
+    return at.session_state["retail_session"].list_reports()[-1]["id"]
+
+
+def test_save_open_cancel_and_confirm_only_on_click():
+    at = app()
+    at.chat_input(key="question").set_value("Show revenue by product in 2025").run()
+    report_id = save_report(at)
+    at.run()
+    session = at.session_state["retail_session"]
+    assert len(session.list_reports()) == 1
+    at.selectbox(key="report_id").set_value(report_id).run()
+    at.button(key="open_report").click().run()
+    assert at.session_state["opened_report_id"] == report_id
+    at.selectbox(key="delete_kind").set_value("Selected report")
+    at.button(key="preview_delete").click().run()
+    pending = session.context.pending
+    assert pending.token not in str(at)
+    at.run()
+    assert len(session.list_reports()) == 1
+    at.button(key=f"cancel_delete:{pending.operation_id}").click().run()
+    assert session.context.pending is None and len(session.list_reports()) == 1
+    at.button(key="preview_delete").click().run()
+    pending = session.context.pending
+    at.button(key=f"confirm_delete:{pending.operation_id}").click().run()
+    assert not session.list_reports() and session.context.pending is None
+    assert at.session_state.get("opened_report_id") is None
+    assert not at.exception
+
+
+def test_literal_wildcards_duplicate_titles_and_superseding_selection():
+    at = app()
+    at.chat_input(key="question").set_value("Show revenue in 2025").run()
+    save_report(at, "100%_review")
+    save_report(at, "100%_review")
+    save_report(at, "Unrelated")
+    session = at.session_state["retail_session"]
+    assert len(at.selectbox(key="report_id").options) == 3
+    at.selectbox(key="delete_kind").set_value("This conversation")
+    at.button(key="preview_delete").click().run()
+    first = session.context.pending
+    assert len(first.targets) == 3
+    at.selectbox(key="delete_kind").set_value("Literal mention")
+    at.text_input(key="delete_mention").set_value("%_")
+    at.button(key="preview_delete").click().run()
+    second = session.context.pending
+    assert len(second.targets) == 2 and second.operation_id != first.operation_id
+    assert f"confirm_delete:{first.operation_id}" not in [b.key for b in at.button]
+    at.button(key=f"confirm_delete:{second.operation_id}").click().run()
+    assert [r["title"] for r in session.list_reports()] == ["Unrelated"]
+    assert not at.exception
+
+
+@pytest.mark.parametrize("outcome", ["expired", "stale", "deleted"])
+def test_changed_reports_and_expired_previews_never_delete_again(outcome, monkeypatch):
+    clock = [1000.0]
+    at = app()
+    session = at.session_state["retail_session"]
+    path = session.runtime.settings.data_dir / "reports.sqlite3"
+    monkeypatch.setattr(session, "_store", lambda: ReportStore(path, now=lambda: clock[0]))
+    at.chat_input(key="question").set_value("Show revenue in 2025").run()
+    report_id = save_report(at)
+    at.selectbox(key="report_id").set_value(report_id).run()
+    at.button(key="open_report").click().run()
+    at.selectbox(key="delete_kind").set_value("Selected report")
+    at.button(key="preview_delete").click().run()
+    preview = session.context.pending
+    if outcome == "expired":
+        clock[0] += 301
+    else:
+        with ReportStore(session.runtime.settings.data_dir / "reports.sqlite3") as other:
+            if outcome == "stale":
+                other.update(session.actor_id, report_id, title="Changed elsewhere")
+            else:
+                delete = other.preview_delete(session.actor_id, report_ids=[report_id])
+                other.confirm_delete(session.actor_id, delete.operation_id, delete.token)
+    at.run()
+    if outcome == "deleted":
+        assert at.session_state.get("opened_report_id") is None
+    at.button(key=f"confirm_delete:{preview.operation_id}").click().run()
+    assert session.context.pending is None
+    assert len(session.list_reports()) == (0 if outcome == "deleted" else 1)
+    assert not at.exception

@@ -137,9 +137,11 @@ class WebSession:
                     label = "[Sensitive request withheld]"
                 else:
                     label = self._redact(text)
-                self.transcript.append(TranscriptTurn(
-                    label, deepcopy(replace(result, pending=None)),
-                ))
+                retained = replace(result, pending=None)
+                if result.saved_report:
+                    retained = replace(retained, saved_report=None, evidence=[],
+                                       message="View the saved report in the Report library.")
+                self.transcript.append(TranscriptTurn(label, deepcopy(retained)))
                 self.transcript = self.transcript[-20:]
             return result
         finally:
