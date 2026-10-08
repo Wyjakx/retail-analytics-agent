@@ -288,11 +288,18 @@ def test_cancel_during_dry_run_never_launches_live_query():
     assert client.query_calls[0][1]["job_config"].dry_run is True
 
 
-def test_active_job_cancellation_and_remaining_rpc_timeout():
-    budget = QueryBudget(deadline=time.monotonic() + 0.1)
+def test_active_job_cancellation_and_remaining_rpc_timeout(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr("retail_agent.gateways.time.monotonic", lambda: clock[0])
+    budget = QueryBudget(deadline=100.125)
     job = FakeJob([])
     budget.register_job(job)
-    assert 0 < budget.rpc_timeout(30) <= 0.1
+    assert budget.rpc_timeout(30) == 0.125
+    clock[0] = 100.0625
+    assert budget.rpc_timeout(30) == 0.0625
+    clock[0] = 100.125
+    with pytest.raises(QueryTimeout):
+        budget.rpc_timeout(30)
     budget.cancel()
     assert job.cancelled
     with pytest.raises(QueryTimeout):
