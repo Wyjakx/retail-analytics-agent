@@ -69,7 +69,7 @@ class AnalyticsService:
         self.traces = traces
         self.scope_resolver = scope_resolver
 
-    def _scope(self) -> ActorScope:
+    def refresh_scope(self) -> ActorScope:
         scope = self.scope_resolver(self.context.actor_id)
         if scope.actor_id != self.context.actor_id:
             raise ScopeViolation("The policy actor does not match the conversation actor.")
@@ -148,7 +148,7 @@ class AnalyticsService:
         return result
 
     async def _handle(self, text: str, budget: QueryBudget, common: dict[str, Any]) -> TurnResult:
-        scope = self._scope()
+        scope = self.refresh_scope()
         if len(text) > 4000:
             return TurnResult("Please keep questions under 4,000 characters.")
         command = self._command(text, scope, common)
@@ -255,7 +255,7 @@ class AnalyticsService:
             evidence = []
             repairable = False
             for index, spec in enumerate(plan.queries):
-                if self._scope() != scope:
+                if self.refresh_scope() != scope:
                     raise ScopeViolation("Product permissions changed during the request.")
                 try:
                     with self.traces.stage("query", attempt=attempt, **common):
@@ -271,7 +271,7 @@ class AnalyticsService:
                         repairable = True
                         break
                     raise
-                if self._scope() != scope:
+                if self.refresh_scope() != scope:
                     raise ScopeViolation("Product permissions changed during the request.")
                 raw_empty = not outcome.rows
                 approved = outcome.approve_for_model(spec, self.settings.min_group_customers)
@@ -307,7 +307,7 @@ class AnalyticsService:
                 # A wider period/filter is a new user decision, never an automatic correction.
                 break
             plan = repair.plan
-        if self._scope() != scope:
+        if self.refresh_scope() != scope:
             raise ScopeViolation("Product permissions changed during analysis.")
         validate_evidence(evidence)
         if len(evidence) != len(plan.queries):
@@ -329,7 +329,7 @@ class AnalyticsService:
             self.traces.event(stage="report_fallback", status="completed", reason="unverified_synthesis", **common)
         finally:
             self._record_model(common)
-        if self._scope() != scope:
+        if self.refresh_scope() != scope:
             raise ScopeViolation("Product permissions changed during reporting.")
         # Keep essential definitions in every saved report, regardless of model wording.
         product_list = ", ".join(str(product) for product in sorted(used_products)[:20])

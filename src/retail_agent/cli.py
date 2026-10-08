@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import replace
 import logging
 import sys
 
@@ -13,13 +12,10 @@ from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
-from .config import ConfigurationError, Settings, load_pseudonym_key, resolve_scope
-from .gateways import BigQueryGateway, OfflineGateway
-from .model import GeminiModel, OfflineModel
-from .pseudonyms import CustomerPseudonymizer
+from .config import ConfigurationError, Settings, resolve_scope
 from .reports import ReportStore
 from .service import AnalyticsService, Conversation, TurnResult
-from .telemetry import TraceRecorder
+from .runtime import build_runtime
 
 
 HELP = """Ask a retail question with a date range (or explicitly 'all time').
@@ -84,25 +80,14 @@ def present(console: Console, result: TurnResult, show_plan: bool = False) -> No
 
 
 async def run_chat(args: argparse.Namespace, console: Console) -> None:
-    settings = Settings.load(args.env_file)
     mode_directory = "demo" if args.demo else "live" if args.live else "offline"
-    settings = replace(settings, data_dir=settings.data_dir / mode_directory)
-    resolve_scope(args.actor, settings.permissions_file)
-    if args.live:
-        settings.validate_live()
-    pseudonymizer = CustomerPseudonymizer(load_pseudonym_key(settings))
-    if args.live:
-        model = GeminiModel(settings.model, timeout_seconds=settings.query_timeout,
-                            max_retries=settings.max_model_retries)
-        gateway = BigQueryGateway(settings.dataset, settings.project, settings.query_timeout,
-                                  settings.max_query_bytes, pseudonymizer=pseudonymizer)
-    else:
-        model, gateway = OfflineModel(), OfflineGateway(pseudonymizer=pseudonymizer)
+    runtime = build_runtime(args.actor, mode_directory, Settings.load(args.env_file))
+    settings, model, gateway = runtime.settings, runtime.model, runtime.gateway
     context = Conversation(args.actor)
     with ReportStore(settings.data_dir / "reports.sqlite3") as store:
         service = AnalyticsService(
             settings, context, model, gateway, store,
-            TraceRecorder(settings.data_dir / "events.jsonl"),
+            runtime.traces,
             lambda actor: resolve_scope(actor, settings.permissions_file),
         )
         console.print("Retail Analytics Agent", style="bold")
