@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python >=3.11 (existing requirement; verify on Python 3.12), Streamlit 1.65.0, existing Pydantic/Rich/SQLite stack, pinned Google ADK 2.11.0 and BigQuery client, pytest, Ruff, Streamlit AppTest.
 
-**Spec:** [Approved design](../specs/2026-10-08-streamlit-design.md). Read it alongside this plan. User approved the spec on 8 October 2026; the user approved this plan and Native execution on 8 October 2026. Tasks 1–6 implementation and verification are complete; final independent review is pending.
+**Spec:** [Approved design](../specs/2026-10-08-streamlit-design.md). Read it alongside this plan. User approved the spec on 8 October 2026; the user approved this plan and Native execution on 8 October 2026. Tasks 1–6 and the final independent review are complete; the three Important findings were fixed with failing-then-passing regressions. Final verification: 255 tests and 5 subtests passed, zero skips.
 
 ## Global Constraints
 
@@ -216,7 +216,7 @@ def test_chart_sorts_months_without_recalculating_ratios():
 - [x] **Step 3: Run final automated checks once on the integrated change.** Run `.venv/Scripts/python.exe -m pytest -q`, `.venv/Scripts/python.exe -m ruff check src tests streamlit_app.py`, `.venv/Scripts/python.exe -m pip check` and `git diff --check`. Expect all tests/checks to pass, with zero skipped UI tests in the UI-enabled CI environment. If changes follow a failure, rerun affected checks before claiming success.
 - [x] **Step 4: Verify installation and inspect the actual UI.** Reproduce README installation in a fresh ignored environment and launch a local, loopback-only Streamlit server. Use the browser tools for the offline sequence: comparison, follow-up, save/open, customer ranking and breakdown, PII refusal, cancel, confirmed deletion, new conversation and actor switch. Verify readable tables, literal titles, complete previews, visible offline mode and no stale content after a scope change. Stop the test server afterward. No real cloud calls are necessary.
 - [x] **Step 5: Update documentation with measured results.** Add the optional UI to the architecture diagram; explain session reset/disconnect, shared saved reports for the same actor and local-only demo identity. Record actual counts, platform, UI walkthrough and remaining semantic/SQL-limit findings in evaluation. Update the spec/plan to reflect completed work only. Commit as `docs: document and verify the Streamlit demonstration`.
-- [ ] **Step 6: Obtain the final code review and hand off.** Follow the selected execution skill and `requesting-code-review`/`verification-before-completion`. Address actionable findings, then report changed behavior, exact checks and limitations. Publishing, pushing or merging is not part of this plan.
+- [x] **Step 6: Obtain the final code review and hand off.** Follow the selected execution skill and `requesting-code-review`/`verification-before-completion`. Address actionable findings, then report changed behavior, exact checks and limitations. Publishing, pushing or merging is not part of this plan.
 
 ## Planning evidence and references
 

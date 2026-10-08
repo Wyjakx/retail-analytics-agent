@@ -18,7 +18,7 @@ With that environment activated, the equivalent commands are `python -m pytest` 
 | Run | Evidence at this development stage |
 | --- | --- |
 | Saved-report service | 17 tests verified locally, including concurrent confirmations and rollback |
-| Complete test suite | 240 tests and 5 subtests passed, zero skips, on Python 3.12.14 / Windows, 8 October 2026 (Streamlit installed) |
+| Complete test suite | 255 tests and 5 subtests passed, zero skips, on Python 3.12.14 / Windows, 8 October 2026 (Streamlit installed) |
 | Optional UI installation | Fresh environment installed `requirements-ui-lock.txt` and the editable package; Streamlit 1.65.0 starts and `pip check` passes |
 | Streamlit browser walkthrough | Offline comparison, product follow-up, literal-title save/open, cancel/confirm deletion, customer ranking and monthly follow-up, PII refusal, new conversation and actor switch verified on loopback |
 | Static checks and dependencies | Ruff passes; `pip check` reports no broken requirements |
@@ -63,6 +63,14 @@ previous CLI validation, not a Streamlit live evaluation. General semantic attri
 limited by the numerical-token validator. SQL still applies its result limit before Python's
 small-group suppression, so eligible groups can be omitted; the UI discloses possible truncation
 but does not change that query policy. Authentication and deployment remain outside this local demo.
+
+The independent whole-branch review identified three important issues, all corrected in one
+regression-driven pass: request-starter replies could inherit an unrelated analysis, the
+state/country region choice remained unresolved, and known confirmation tokens could be saved
+as titles. Each was reproduced by failing tests before the fix. The final suite passed 255
+tests and 5 subtests with zero skips; Ruff, dependency consistency and whitespace checks passed.
+No critical or minor findings were reported. The fixes were verified by tests, without a second
+review round. The explicit engine/live/production limitations above remain unchanged.
 
 ## Scenarios and expected results
 

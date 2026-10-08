@@ -239,3 +239,29 @@ def test_changed_reports_and_expired_previews_never_delete_again(outcome, monkey
     assert session.context.pending is None
     assert len(session.list_reports()) == (0 if outcome == "deleted" else 1)
     assert not at.exception
+
+
+@pytest.mark.parametrize("token_state", ["active", "consumed", "reset"])
+@pytest.mark.parametrize("channel", ["chat", "form"])
+def test_confirmation_tokens_cannot_be_saved_as_titles(token_state, channel):
+    at = app()
+    at.chat_input(key="question").set_value("Show revenue in 2025").run()
+    save_report(at, "Original")
+    session = at.session_state["retail_session"]
+    pending = session.run_command("/delete conversation").pending
+    token = pending.token
+    if token_state == "consumed":
+        session.cancel_delete(pending.operation_id)
+    elif token_state == "reset":
+        session.reset()
+        session.submit("Show revenue in 2025")
+    at.run()
+    if channel == "chat":
+        at.chat_input(key="question").set_value(f"/save {token}").run()
+    else:
+        at.text_input(key="save_title").set_value(token)
+        at.button(key="save_report").click().run()
+    assert len(session.list_reports()) == 1
+    assert token not in str(at)
+    assert token not in repr(session.transcript)
+    assert not at.exception

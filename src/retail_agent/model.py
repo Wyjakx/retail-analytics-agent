@@ -189,11 +189,22 @@ def _plain(text: str) -> str:
 
 
 def starts_new_request(text: str) -> bool:
-    """Explicit request starters distinguish a new question from a short answer."""
-    return bool(re.match(
-        r"^(?:show|compare|give|what|which|top|list|calculate|analy[sz]e|"
-        r"affiche|montre|compare|calcule|analyse|quels?|quelles?)\b", _plain(text).strip(),
-    ))
+    """Recognize a replacement intent, not just a verb prefacing an answer."""
+    text = _plain(text).strip()
+    starter = re.match(
+        r"^(?:(?:please|could you|can you|would you)\s+)*"
+        r"(?:show|compare|give|what|which|top|list|calculate|analy[sz]e|"
+        r"affiche|montre|calcule|analyse|quels?|quelles?)\b", text,
+    )
+    if not starter:
+        return False
+    time_request = re.search(
+        rf"\b20\d{{2}}\b|all[ -]?time|all years|ever|toutes les annees|"
+        rf"depuis toujours|toute la periode|{UP_TO_DATE}|{THIS_MONTH}|{LAST_MONTH}|{YEAR_TO_DATE}",
+        text,
+    )
+    return bool(re.search(CUSTOMER_RANKING, text)
+                or (_metrics(text) and (_dimensions(text) or time_request)))
 
 
 UP_TO_DATE = r"up[ -]to[ -]date|a jour|jusqu.a aujourd.hui"
@@ -375,11 +386,21 @@ class OfflineModel:
         text = _plain(question)
         pending = safe_catalog.get("pending_clarification") or []
         if pending and not starts_new_request(question):
+            parts = [_plain(item["content"]) for item in pending if item["role"] == "user"]
+            parts.append(text)
+            # Resolve a supported choice rather than preserving the ambiguous phrase
+            # forever. A bare "state" or "country" is an answer to the region question.
+            for index, reply in enumerate(parts[1:], start=1):
+                choice = re.fullmatch(
+                    r"(?:by |per |par )?(?:customer )?(state|country|etat|pays)[.!]?", reply.strip(),
+                )
+                if choice and any(re.search(r"by region|par region", p) for p in parts[:index]):
+                    dimension = {"etat": "state", "pays": "country"}.get(choice[1], choice[1])
+                    parts[:index] = [re.sub(r"by region|par region", f"by {dimension}", p)
+                                     for p in parts[:index]]
+                    parts[index] = ""
             # A textual boundary prevents a year reply from joining a product-ID list.
-            text = "\nreply: ".join([
-                *(_plain(item["content"]) for item in pending if item["role"] == "user"),
-                text,
-            ])
+            text = "\nreply: ".join(parts)
             previous_plan = None
         text = re.sub(r"\[redacted_(?:secret|confirmation|email|phone)\]", "", text)
         if re.search(r"email|e-mail|address|adresse|phone|telephone|customer.?id|user.?id|nom.*clients?|clients?.*nom|customers?.*names?|names?.*customers?", text):

@@ -49,22 +49,48 @@ def test_clarification_reply_completes_original_question(service):
     assert service.context.pending_clarification == []
 
 
-def test_clarification_does_not_inherit_unrelated_successful_analysis(service):
+@pytest.mark.parametrize("reply", ["By spending in 2025", "Show spending in 2025",
+                                  "Please show spending in 2025"])
+def test_clarification_does_not_inherit_unrelated_successful_analysis(service, reply):
     ask(service, "Show units by state in 2024")
     assert ask(service, "Top customers").report is None
-    result = ask(service, "By spending in 2025")
+    result = ask(service, reply)
     assert result.report is not None
     spec = result.plan.queries[0]
     assert spec.metrics == ["revenue"] and spec.dimensions == ["customer"]
     assert spec.order_by == "revenue" and spec.start_date.year == 2025
 
 
-def test_new_complete_question_replaces_pending_clarification(service):
-    ask(service, "Show revenue by product")
-    result = ask(service, "Show units by state in 2024")
+@pytest.mark.parametrize("prefix", ["Show", "Please show", "Could you show"])
+def test_new_complete_question_replaces_pending_clarification(service, prefix):
+    assert ask(service, "Show revenue by product").report is None
+    result = ask(service, f"{prefix} units by state in 2024")
     assert result.report is not None
     assert result.plan.queries[0].metrics == ["units"]
     assert result.plan.queries[0].dimensions == ["state"]
+    assert result.plan.queries[0].start_date.year == 2024
+    assert service.context.pending_clarification == []
+
+
+def test_complete_replacement_does_not_restore_previous_grouping(service):
+    ask(service, "Show units by state in 2024")
+    assert ask(service, "Top customers").report is None
+    result = ask(service, "Show orders in 2025")
+    assert result.report is not None
+    spec = result.plan.queries[0]
+    assert spec.metrics == ["orders"] and spec.dimensions == []
+    assert spec.start_date.year == 2025
+
+
+@pytest.mark.parametrize("reply,dimension", [("By state", "state"), ("State", "state"),
+                                            ("By country", "country"), ("Country", "country")])
+def test_region_clarification_resolves_the_offered_choice(service, reply, dimension):
+    assert ask(service, "Show revenue by region in 2025").report is None
+    result = ask(service, reply)
+    assert result.report is not None
+    spec = result.plan.queries[0]
+    assert spec.metrics == ["revenue"] and spec.dimensions == [dimension]
+    assert (str(spec.start_date), str(spec.end_date)) == ("2025-01-01", "2026-01-01")
     assert service.context.pending_clarification == []
 
 

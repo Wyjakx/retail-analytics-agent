@@ -164,6 +164,7 @@ class AnalyticsService:
         question = sanitize_input(text)
         for token in self.context.confirmation_tokens:
             question = question.replace(token, "[REDACTED_CONFIRMATION]")
+        had_pending_clarification = bool(self.context.pending_clarification)
         if starts_new_request(question):
             self.context.pending_clarification.clear()
         pending = self.context.pending_clarification
@@ -187,7 +188,7 @@ class AnalyticsService:
                 with self.traces.stage("planning", attempt=attempt, **common):
                     decision = await self.model.plan(
                         question, self.context.history, catalog,
-                        None if pending else self.context.previous_plan,
+                        None if had_pending_clarification or pending else self.context.previous_plan,
                         repair_error="invalid_plan" if attempt else None,
                     )
                 break
@@ -400,6 +401,8 @@ class AnalyticsService:
             title = (save or natural_save).group(1) or self.context.last_report.title
             if not 1 <= len(title) <= 120:
                 return TurnResult("Choose a report title between 1 and 120 characters.")
+            if any(token in title for token in self.context.confirmation_tokens):
+                raise UnsafeOutput("A confirmation token cannot be used in a report title.")
             validate_text(title)
             report = self.reports.save(
                 scope.actor_id, self.context.conversation_id, title,
