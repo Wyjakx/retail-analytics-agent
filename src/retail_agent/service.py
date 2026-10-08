@@ -19,7 +19,7 @@ from .analytics import (
 )
 from .config import ConfigurationError, Settings
 from .gateways import QueryBudget
-from .model import AnalystReport, AnalyticalModel, deterministic_report
+from .model import AnalystReport, AnalyticalModel, deterministic_report, starts_new_request
 from .reports import InvalidConfirmationError, PendingDeletion, ReportStore, ReportStoreError
 from .safety import (
     UnsafeOutput, privacy_refusal, sanitize_input, validate_evidence, validate_report, validate_text,
@@ -32,6 +32,7 @@ class Conversation:
     actor_id: str
     conversation_id: str = field(default_factory=lambda: uuid4().hex)
     history: list[dict[str, str]] = field(default_factory=list)
+    pending_clarification: list[dict[str, str]] = field(default_factory=list)
     previous_plan: AnalysisPlan | None = None
     last_report: AnalystReport | None = None
     last_evidence: list[dict[str, Any]] = field(default_factory=list)
@@ -75,6 +76,7 @@ class AnalyticsService:
         if self.context.scope_snapshot != scope.allowed_product_ids:
             # Revoke cached analytical context when policy changes.
             self.context.history.clear()
+            self.context.pending_clarification.clear()
             self.context.previous_plan = None
             self.context.last_report = None
             self.context.last_evidence.clear()
@@ -154,12 +156,21 @@ class AnalyticsService:
             return command
         refusal = privacy_refusal(text)
         if refusal:
+            self.context.pending_clarification.clear()
             self.traces.event(stage="input_policy", status="refused", reason="privacy", **common)
             return TurnResult(refusal)
         question = sanitize_input(text)
         for token in self.context.confirmation_tokens:
             question = question.replace(token, "[REDACTED_CONFIRMATION]")
+        if starts_new_request(question):
+            self.context.pending_clarification.clear()
+        pending = self.context.pending_clarification
+        if pending and (len(pending) + 2 > 6
+                        or sum(len(item["content"]) for item in pending) + len(question) > 4000):
+            pending.clear()
+            return TurnResult("Please provide one complete question, including the metric and period.")
         catalog = {
+            "pending_clarification": [dict(item) for item in pending],
             "tables": self.gateway.schema_catalog(), "metrics": METRIC_DEFINITIONS,
             "dimensions": ["month", "state", "country", "category", "product", "customer"],
             "allowed_product_ids": list(scope.allowed_product_ids),
@@ -173,7 +184,8 @@ class AnalyticsService:
             try:
                 with self.traces.stage("planning", attempt=attempt, **common):
                     decision = await self.model.plan(
-                        question, self.context.history, catalog, self.context.previous_plan,
+                        question, self.context.history, catalog,
+                        None if pending else self.context.previous_plan,
                         repair_error="invalid_plan" if attempt else None,
                     )
                 break
@@ -190,6 +202,18 @@ class AnalyticsService:
             return TurnResult("No valid analysis plan was produced.")
         if decision.action in ("refuse", "clarify"):
             validate_text(decision.message)
+            if decision.action == "clarify":
+                exchange = [
+                    *pending, {"role": "user", "content": question},
+                    {"role": "assistant", "content": decision.message},
+                ]
+                if sum(len(item["content"]) for item in exchange) <= 4000 and len(exchange) <= 6:
+                    self.context.pending_clarification = exchange
+                else:
+                    pending.clear()
+                    return TurnResult("Please provide one complete question, including the metric and period.")
+            else:
+                pending.clear()
             return TurnResult(decision.message)
         if decision.action == "schema":
             if hasattr(self.gateway, "validate_schema"):
@@ -204,7 +228,12 @@ class AnalyticsService:
                 "Personal identity values are unavailable.", catalog=schema,
             )
         plan = AnalysisPlan.model_validate(decision.plan.model_dump())
-        return await self._analyze(question, plan, scope, budget, catalog, common)
+        report_question = question
+        if pending:
+            report_question = "\nReply: ".join([
+                *(item["content"] for item in pending if item["role"] == "user"), question,
+            ])
+        return await self._analyze(report_question, plan, scope, budget, catalog, common)
 
     async def _analyze(
         self, question: str, plan: AnalysisPlan, scope: ActorScope, budget: QueryBudget,
@@ -319,6 +348,7 @@ class AnalyticsService:
         report = report.model_copy(update={"caveats": (context_caveats + report.caveats)[:8]})
         validate_text(report.to_markdown())
         self.context.previous_plan = plan
+        self.context.pending_clarification.clear()
         self.context.last_report = report
         self.context.last_evidence = evidence
         self.context.last_products = tuple(sorted(used_products))

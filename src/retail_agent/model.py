@@ -104,6 +104,10 @@ Schema questions use action schema and a brief description of the requested
 tables, then Python supplies the approved schema. Irrelevant topics use refuse.
 Do not invent churn definitions, causal explanations, results, or percentages.
 A repair_error is a sanitized validation code, not permission to bypass policy.
+catalog.pending_clarification contains an unresolved question and clarifying
+exchange, separate from successful history. Use it for short clarification
+answers. A new complete request replaces it; never inherit unrelated successful
+analysis constraints when resolving that exchange.
 """
 
 REPORTER_INSTRUCTION = """Write an evidence-grounded retail analyst report.
@@ -182,6 +186,14 @@ def _plain(text: str) -> str:
         character for character in unicodedata.normalize("NFKD", text.lower())
         if not unicodedata.combining(character)
     )
+
+
+def starts_new_request(text: str) -> bool:
+    """Explicit request starters distinguish a new question from a short answer."""
+    return bool(re.match(
+        r"^(?:show|compare|give|what|which|top|list|calculate|analy[sz]e|"
+        r"affiche|montre|compare|calcule|analyse|quels?|quelles?)\b", _plain(text).strip(),
+    ))
 
 
 UP_TO_DATE = r"up[ -]to[ -]date|a jour|jusqu.a aujourd.hui"
@@ -361,6 +373,15 @@ class OfflineModel:
         self.last_metadata = {"stage": "planner", "model_calls": 0,
                               "retries": 0, "status": "simulated"}
         text = _plain(question)
+        pending = safe_catalog.get("pending_clarification") or []
+        if pending and not starts_new_request(question):
+            # A textual boundary prevents a year reply from joining a product-ID list.
+            text = "\nreply: ".join([
+                *(_plain(item["content"]) for item in pending if item["role"] == "user"),
+                text,
+            ])
+            previous_plan = None
+        text = re.sub(r"\[redacted_(?:secret|confirmation|email|phone)\]", "", text)
         if re.search(r"email|e-mail|address|adresse|phone|telephone|customer.?id|user.?id|nom.*clients?|clients?.*nom|customers?.*names?|names?.*customers?", text):
             return Decision(action="refuse", message="Raw customer IDs and personal data are unavailable. Use supplied pseudonymous customer references instead.")
         references = list(dict.fromkeys(re.findall(CUSTOMER_REFERENCE, text)))
