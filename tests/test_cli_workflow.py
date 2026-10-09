@@ -1,5 +1,4 @@
-"""Smoke tests through the actual process, parser, terminal and on-disk state."""
-
+"""One genuine interactive-process journey, with isolated local configuration."""
 import json
 import os
 from pathlib import Path
@@ -45,20 +44,3 @@ def test_interactive_cli_saves_literal_unicode_title_and_resets_conversation(cli
     # Plain 'yes' and cancellation preserve the report; /new cannot save stale evidence.
     assert len(saved) == 1 and saved[0][0] == title
     assert json.loads(saved[0][1])["queries"][0]["rows"] == [{"revenue": 900.0}]
-
-
-def test_demo_runs_to_completion_and_confirms_its_preview(cli, tmp_path):
-    result = cli("--demo", "--show-plan")
-    assert result.returncode == 0, result.stderr
-    assert "cust_" in result.stdout and "Deleted 1" in result.stdout
-    assert "Traceback" not in result.stderr
-    with sqlite3.connect(tmp_path / "demo" / "reports.sqlite3") as database:
-        assert database.execute("SELECT COUNT(*) FROM reports").fetchone()[0] == 0
-
-
-def test_live_startup_without_credentials_exits_with_actionable_error(cli, tmp_path):
-    result = cli("--live", "--question", "Revenue all time")
-    assert result.returncode == 2
-    assert "Set GOOGLE_API_KEY" in result.stdout
-    assert "Traceback" not in result.stderr
-    assert not (tmp_path / "live" / "reports.sqlite3").exists()

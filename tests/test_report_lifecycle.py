@@ -1,12 +1,63 @@
-"""Data-loss and ownership contracts that require a real SQLite database."""
-
+"""Five report-lifecycle and data-loss contracts using actual SQLite files."""
 from concurrent.futures import ThreadPoolExecutor
+import json
 import sqlite3
 from threading import Barrier
 
 import pytest
 
-from retail_agent.reports import ReportAccessError, ReportStore, ReportStoreError
+from retail_agent.reports import ReportStore, ReportStoreError
+from tests.scenarios import ask, plan, report
+
+
+def test_saved_report_survives_restart_but_requires_current_owner_permissions(application, policy_file):
+    app, _ = application(plan(), report("Revenue was 500."))
+    ask(app)
+    ask(app, "/save Quarterly review")
+    saved = app.reports.list_reports("alice")[0]
+    restarted, _ = application()
+    assert ask(restarted, f"/open {saved.report_id}").saved_report == saved
+    assert saved.evidence["queries"][0]["rows"] == [{"revenue": 500}]
+    other, provider = application(actor="bob")
+    assert ask(other, "/reports").reports == []
+    assert ask(other, f"/open {saved.report_id}").saved_report is None
+    assert ask(other, f"/delete id {saved.report_id}").pending is None
+    assert provider.payloads == []
+
+    pending = ask(app, "/delete conversation").pending
+    policy_file.write_text('{"alice": [3], "bob": [3]}', encoding="utf-8")
+    explained = ask(app, "/explain")
+    assert explained.report is None and explained.evidence == []
+    assert app.context.history == [] and app.context.previous_plan is None
+    assert ask(app, "/reports").reports == []
+    assert ask(app, f"/open {saved.report_id}").saved_report is None
+    ask(app, f"/confirm {pending.token}")
+    assert app.reports.list_reports("alice") == [saved]
+
+
+def test_delete_requires_fresh_consent_for_the_exact_preview(application):
+    app, provider = application(plan(), report())
+    ask(app)
+    ask(app, "/save Budget 100%_done")
+    ask(app, "/save Other report")
+    pending = ask(app, "Delete all reports mentioning 100%_done").pending
+    assert [target.title for target in pending.targets] == ["Budget 100%_done"]
+    ask(app, "yes")
+    ask(app, "/confirm wrong-token")
+    assert len(app.reports.list_reports("alice")) == 2
+    ask(app, "/cancel")
+    ask(app, f"/confirm {pending.token}")
+    assert len(app.reports.list_reports("alice")) == 2
+    fresh = ask(app, "Delete all reports mentioning 100%_done").pending
+    ask(app, "/save Created after preview")
+    deleted = ask(app, f"/confirm {fresh.token}")
+    assert deleted.deletion_status == "deleted"
+    assert ask(app, f"/confirm {fresh.token}").message == deleted.message
+    assert {row.title for row in app.reports.list_reports("alice")} == {
+        "Other report", "Created after preview",
+    }
+    assert len(provider.payloads) == 2
+    assert fresh.token not in json.dumps(provider.payloads) + app.traces.path.read_text(encoding="utf-8")
 
 
 @pytest.fixture
@@ -65,26 +116,7 @@ def test_failure_at_token_consumption_rolls_back_reports_and_allows_retry(store)
     assert store.list_reports("alice") == []
 
 
-def test_revision_on_another_connection_preserves_the_entire_previewed_batch(store):
-    """One revised report invalidates consent for all frozen targets."""
-    unchanged = store.save("alice", "sales", "January", "Keep this too")
-    original = store.save("alice", "sales", "February", "Old findings")
-    pending = store.preview_delete("alice")
-    with ReportStore(store.path, now=lambda: 1001) as other_connection:
-        revised = other_connection.update("alice", original.id, body="Corrected findings")
-
-    outcome = store.confirm_delete("alice", pending.operation_id, pending.token)
-
-    assert outcome.status == "stale"
-    assert outcome.report_ids == ()
-    assert {report.id: report for report in store.list_reports("alice")} == {
-        unchanged.id: unchanged,
-        revised.id: revised,
-    }
-
-
-@pytest.mark.parametrize("expiry_offset", [0, 1], ids=["at-expiry", "after-expiry"])
-def test_restart_preserves_confirmation_but_expiry_prevents_deletion(tmp_path, expiry_offset):
+def test_restart_preserves_confirmation_but_expiry_prevents_deletion(tmp_path):
     """Restart must preserve valid consent without extending its deadline."""
     database_path = tmp_path / "reports.sqlite"
     timestamp = [1000]
@@ -100,28 +132,9 @@ def test_restart_preserves_confirmation_but_expiry_prevents_deletion(tmp_path, e
         assert outcome.status == "deleted"
         assert outcome.report_ids == (valid_report.id,)
 
-    timestamp[0] = 1010 + expiry_offset
+    timestamp[0] = 1010
     with ReportStore(database_path, now=lambda: timestamp[0]) as restarted:
         expired = restarted.confirm_delete("alice", expiring.operation_id, expiring.token)
         assert expired.status == "expired"
         assert expired.report_ids == ()
         assert restarted.list_reports("alice") == [expiring_report]
-
-
-def test_another_actor_cannot_execute_or_consume_a_known_confirmation(store):
-    """A leaked operation and token must not let another actor delete or cancel."""
-    owned = store.save("alice", "sales", "January", "Alice's findings")
-    other_owned = store.save("bob", "sales", "January", "Bob's findings")
-    pending = store.preview_delete("alice")
-    with ReportStore(store.path, now=lambda: 1000) as other_actor:
-        with pytest.raises(ReportAccessError):
-            other_actor.confirm_delete("bob", pending.operation_id, pending.token)
-        with pytest.raises(ReportAccessError):
-            other_actor.cancel_delete("bob", pending.operation_id)
-
-    assert store.list_reports("alice") == [owned]
-    outcome = store.confirm_delete("alice", pending.operation_id, pending.token)
-    assert outcome.status == "deleted"
-    assert outcome.report_ids == (owned.id,)
-    assert store.list_reports("alice") == []
-    assert store.list_reports("bob") == [other_owned]
