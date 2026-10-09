@@ -1,5 +1,7 @@
 import asyncio
+from copy import deepcopy
 from datetime import date
+import json
 from typing import Any
 
 from google.adk.models.base_llm import BaseLlm
@@ -48,6 +50,25 @@ def test_real_adk_graph_with_fake_model_validates_typed_output_and_has_no_tools(
     assert model.last_metadata["total_tokens"] == 30
     assert model.last_metadata["status"] == "success"
     assert fake.requests[0].config.tools in (None, [])
+
+
+def test_live_reporter_receives_trusted_inclusive_period_labels_without_mutating_sources():
+    evidence = [
+        {"period": {"start": "2020-01-01", "end_exclusive": "2024-01-01"}},
+        {"period": {"start": "2024-02-01", "end_exclusive": "2024-03-01"}},
+        {"period": {"start": None, "end_exclusive": None}},
+        {},
+    ]
+    original = deepcopy(evidence)
+    fake = FakeAdkModel(responses=['{"title":"Comparison","summary":"Approved results."}'])
+    model = GeminiModel("fake-local-model", model_override=fake, max_retries=0)
+    asyncio.run(model.report("Compare periods", evidence, {}))
+    payload = json.loads(fake.requests[0].contents[-1].parts[0].text)
+    assert payload["evidence"][0]["period_label"] == "2020-01-01 through 2023-12-31 (both inclusive)"
+    assert payload["evidence"][1]["period_label"] == "2024-02-01 through 2024-02-29 (both inclusive)"
+    assert payload["evidence"][2]["period_label"] == "All time"
+    assert "period_label" not in payload["evidence"][3]
+    assert evidence == original
 
 
 def test_adk_graph_rejects_raw_sql_instead_of_executing_it():
@@ -143,7 +164,7 @@ def test_offline_multistep_comparison_and_report_label_simulation():
         decision = await model.plan("Compare revenue in 2023 versus 2024", [], {})
         assert len(decision.plan.queries) == 2
         report = await model.report("Compare revenue", [{"evidence_id": "E1", "rows": [{"revenue": 15.5}], "simulated": True}], {})
-        assert "[E1] revenue=15.5" in report.findings
+        assert "[E1] Revenue was 15.50." in report.findings
         assert any("Synthetic offline" in caveat for caveat in report.caveats)
     asyncio.run(run())
 
@@ -216,9 +237,9 @@ def test_deterministic_report_labels_supplied_periods_and_never_invents_them():
         {"evidence_id": "E2", "period": {"start": None, "end_exclusive": None}, "rows": [{"revenue": 200}]},
         {"evidence_id": "E3", "rows": [{"revenue": 300}]},
     ])
-    assert report.findings[0] == "[E1] Period: 2025-01-01 (inclusive) to 2025-02-01 (exclusive). revenue=100"
-    assert report.findings[1] == "[E2] Period: all time. revenue=200"
-    assert report.findings[2] == "[E3] revenue=300"
+    assert report.findings[0] == "[E1] Period: 2025-01-01 (inclusive) to 2025-02-01 (exclusive). Revenue was 100.00."
+    assert report.findings[1] == "[E2] Period: all time. Revenue was 200.00."
+    assert report.findings[2] == "[E3] Revenue was 300.00."
 
 
 @pytest.mark.parametrize("question,limit", [
@@ -319,7 +340,7 @@ def test_customer_report_keeps_opaque_refs_and_explains_scoped_amounts():
         {"evidence_id": "E1", "period": {"start": None, "end_exclusive": None},
          "rows": [{"customer": reference, "revenue": 35.5}]},
     ])
-    assert f"customer={reference}; revenue=35.5" in report.findings[0]
+    assert f"Customer: {reference}. Revenue was 35.50." in report.findings[0]
     assert "pseudonymous" in report.summary
     assert any("not complete customer lifetime spending" in value for value in report.caveats)
     assert any("authorized products" in value for value in report.caveats)

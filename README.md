@@ -2,7 +2,7 @@
 
 A conversational analytics assistant for retail executives, using Python, Google ADK 2, Gemini and BigQuery.
 
-**Status: runnable local prototype with a verified live CLI smoke test.** With application-default credentials, Gemini planning, BigQuery execution and Gemini report generation completed one real analysis; all six metrics matched independent SQL. The offline CLI, multi-turn follow-ups, saved reports and safety/error-handling boundaries are tested locally. Broader live scenarios still need validation. The production architecture is a design proposal, not a deployment.
+**Status: runnable local prototype with verified live CLI and Streamlit smoke tests.** With application-default credentials, Gemini planning, BigQuery execution and Gemini report generation completed real analyses; all six metrics matched independent SQL in the CLI check. The offline CLI, multi-turn follow-ups, saved reports and safety/error-handling boundaries are tested locally. Broader live scenarios still need validation. The production architecture is a design proposal, not a deployment.
 
 ## Intended user experience
 
@@ -89,6 +89,13 @@ The demo uses two queries for the monthly comparison, follows up by product, sav
 
 Natural-language deletion also accepts `Delete all reports mentioning Client X` and `Delete all the reports we made in this conversation`. A plain `yes` cannot execute deletion. The model never receives report confirmation tokens; the CLI handles them separately.
 
+The CLI shows a short answer and readable tables by default. Ungrouped totals use a
+two-column metric/value table; wider grouped results stack their fields to fit the terminal.
+Periods, product scope, privacy suppression, incomplete results and fallback notices remain
+visible. `/explain` displays the complete last report, metric definitions, source IDs and
+validated plan without querying again. `--show-plan` selects detailed output for the run.
+Saved reports retain their full content. Neither view recalculates totals or assumes a currency.
+
 ## Optional Streamlit interface
 
 Install the separate UI lock into the same environment, then launch from the repository:
@@ -105,6 +112,12 @@ actor and mode changes together and starts a fresh conversation. Live uses the c
 below and only submits an analysis when you send a question or click an example.
 The original CLI installation remains valid without Streamlit; UI tests are skipped when
 that optional dependency is absent. CI installs the UI lock to exercise both interfaces.
+
+Chat starts with a concise answer. Ungrouped totals appear as metric cards copied from the
+approved evidence; tables and source IDs are under **View data and sources**, and definitions
+under **Scope and definitions**. Scope, suppression and truncation notices remain visible.
+If model reporting fails or its output is rejected, a disclosed, deterministic explanation
+uses the approved results. Saved reports retain the complete Markdown and evidence.
 
 For a short demonstration:
 
@@ -167,6 +180,7 @@ Runtime data goes under `APP_DATA_DIR` (default `runtime`), separated into `demo
 | File | Responsibility |
 | --- | --- |
 | `src/retail_agent/cli.py` | Chat, result presentation and human confirmation |
+| `src/retail_agent/cli_views.py` | Compact terminal answers, responsive tables and full diagnostic output |
 | `streamlit_app.py`, `src/retail_agent/streamlit_ui.py` | Optional browser entry point, session controls and chat |
 | `src/retail_agent/streamlit_views.py` | Approved evidence charts and saved-report controls |
 | `src/retail_agent/web_session.py`, `src/retail_agent/runtime.py` | Per-browser state, short-lived stores and shared runtime construction |

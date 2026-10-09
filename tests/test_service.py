@@ -295,3 +295,29 @@ def test_report_preview_renders_literal_titles_without_markup_or_truncation(serv
     present(Console(file=output, width=80), preview)
     assert "[bold]literal[/bold]" in output.getvalue()
     assert "…" not in output.getvalue()
+
+
+def test_explain_returns_the_complete_last_report_without_new_analysis(service):
+    original = ask(service, "Show revenue in 2025")
+    result = ask(service, "/EXPLAIN")
+    assert result.report is not None
+    assert result.report.to_markdown() == original.report.to_markdown()
+    assert result.evidence == original.evidence and result.plan == original.plan
+    events = [json.loads(line) for line in service.traces.path.read_text().splitlines()]
+    stages = {event["stage"] for event in events if event["request_id"] == result.request_id}
+    assert not stages.intersection({"planning", "query", "reporting"})
+
+
+def test_explain_preserves_fallback_disclosure_and_current_permissions(service):
+    class UnavailableReporter(OfflineModel):
+        async def report(self, *args, **kwargs):
+            raise ModelFailure("model_unavailable")
+
+    service.model = UnavailableReporter()
+    original = ask(service, "Show revenue in 2025")
+    assert original.report_fallback
+    assert ask(service, "/explain").report_fallback
+    service.scope_resolver = lambda actor: replace(resolve_scope(actor), allowed_product_ids=(2,))
+    restricted = ask(service, "/explain")
+    assert restricted.report is None and not restricted.evidence
+    assert not restricted.report_fallback

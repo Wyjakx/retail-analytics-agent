@@ -18,7 +18,7 @@ With that environment activated, the equivalent commands are `python -m pytest` 
 | Run | Evidence at this development stage |
 | --- | --- |
 | Saved-report service | 17 tests verified locally, including concurrent confirmations and rollback |
-| Complete test suite | 255 tests and 5 subtests passed, zero skips, on Python 3.12.14 / Windows, 8 October 2026 (Streamlit installed) |
+| Complete test suite | 305 tests and 5 subtests passed, zero skips, on Python 3.12.14 / Windows, 9 October 2026 (Streamlit installed) |
 | Optional UI installation | Fresh environment installed `requirements-ui-lock.txt` and the editable package; Streamlit 1.65.0 starts and `pip check` passes |
 | Streamlit browser walkthrough | Offline comparison, product follow-up, literal-title save/open, cancel/confirm deletion, customer ranking and monthly follow-up, PII refusal, new conversation and actor switch verified on loopback |
 | Static checks and dependencies | Ruff passes; `pip check` reports no broken requirements |
@@ -27,7 +27,8 @@ With that environment activated, the equivalent commands are `python -m pytest` 
 | Live BigQuery calculations | Four table schemas and US location verified; all six metrics matched independent SQL for authorized products 1 and 2, explicitly all time |
 | Live application service | One complete question → plan → parameterized BigQuery query → Gemini report passed with two model calls and no report fallback |
 | Live CLI | Normal ADC-based startup and the same six-metric all-time analysis passed with a Gemini report |
-| Broader live scenarios | Live follow-ups, multi-query comparisons and failure scenarios remain unverified |
+| Live Streamlit | Products 1 and 2 combined, all time, six metrics: Gemini report accepted without fallback; metric cards, source table, definitions and save/open verified |
+| Broader live scenarios | Real CLI follow-ups, comparisons, empty/suppressed results, recommendations and report lifecycle verified on 9 October; see the automated acceptance record below. Injected failures remain a separate test layer. |
 
 The live calculations returned one approved product group and suppressed another with fewer than three purchasers. Each of the application and reference queries processed 13,418,810 bytes and recorded 41,943,040 billed bytes, within the 100 MB per-query cap. A separate product-1 query for 2025 returned no rows; that case was retained rather than silently broadening its period.
 
@@ -58,8 +59,8 @@ The audit's existing real-clock deadline assertion failed on floating-point subt
 (`0.1000000000003638 <= 0.1`). It now uses an injected clock at exact binary fractions,
 verifying decreasing remaining time, expiry and job cancellation without changing runtime logic.
 
-No new Gemini/BigQuery live run was performed for the UI. The live rows above describe the
-previous CLI validation, not a Streamlit live evaluation. General semantic attribution remains
+The initial UI walkthrough used offline data; the later live check is recorded below.
+General semantic attribution remains
 limited by the numerical-token validator. SQL still applies its result limit before Python's
 small-group suppression, so eligible groups can be omitted; the UI discloses possible truncation
 but does not change that query policy. Authentication and deployment remain outside this local demo.
@@ -71,6 +72,133 @@ as titles. Each was reproduced by failing tests before the fix. The final suite 
 tests and 5 subtests with zero skips; Ruff, dependency consistency and whitespace checks passed.
 No critical or minor findings were reported. The fixes were verified by tests, without a second
 review round. The explicit engine/live/production limitations above remain unchanged.
+
+### Report validation and presentation correction
+
+A reporter-only replay reproduced a false numerical rejection: Gemini correctly described
+the approved minimum group size and zero suppressed groups, but those metadata numbers were
+absent from the validator's allowlist. The check now includes typed, approved product scope,
+the positive minimum customer threshold when privacy applies, and nonnegative suppressed-group
+counts. Arbitrary operational statistics and invented numbers remain excluded. Regression
+tests cover differing thresholds, invalid metadata, false claims and application integration.
+
+Chat now presents a concise explanation and direct evidence-backed cards for one ungrouped
+result. It moves exact source citations and tables to a closed source panel, and definitions
+to a separate panel. Grouped results are never summed into headline totals. The deterministic
+fallback uses readable sentences, omits generic advice and identifies itself. Scope, privacy,
+query truncation and summary-subset notices remain visible. An independent review caught a
+hidden summary-subset notice for 11 returned rows and 10 findings; a failing AppTest reproduced
+it before the correction. Saved Markdown and underlying evidence remain complete.
+
+The same user question was replayed in the actual Streamlit Live UI with
+`gemini-3.5-flash-lite`: total revenue, orders, purchasing customers, units, average order value
+and spend per customer for products 1 and 2 combined, all time, without grouping. It returned
+237.00, 4, 4, 4, 59.25 and 59.25 respectively, without asserting a currency. Trace request
+`4b96a9744031428e91f24f3fc68030c3` completed planning, BigQuery and reporting in 8.625 seconds,
+with two model calls and no fallback event. The source table, scope panel and saving/reopening
+the full report were checked in the browser. This is one live analytical case, not an
+evaluation of every supported question. Numerical presence still cannot prove correct semantic
+attribution of every value; changing the model does not remove that limitation.
+
+### CLI presentation
+
+The terminal now uses a compact answer panel and readable labels. A single ungrouped result
+uses a vertical metric table; wide grouped records stack their fields without aggregating or
+omitting rows. `/explain` and its case-insensitive/natural-language aliases return the approved
+last report, sources and plan without new analytical calls. Fallback provenance is retained,
+and changing permissions clears it with the cached report and evidence.
+
+Rendering checks cover 50–120-column terminals, unchanged ratios and periods, empty results,
+visible privacy/truncation notices, literal markup and full customer/report references.
+Independent review found two ellipsis-truncation cases in narrow tables; both were reproduced
+with failing tests, then corrected by folding text. Existing exact deletion previews and the
+scripted CLI demo remain covered. A real CLI replay of the six-metric question above completed
+with Gemini and BigQuery, without fallback, and returned the same six values. Its terminal
+output was retained locally under ignored `runtime/live/cli-presentation` files.
+The final suite passed 286 tests and 5 subtests with zero skips; Ruff and whitespace checks
+passed. A piped interactive session verified the compact answer, uppercase `/EXPLAIN` and exit.
+
+### Live acceptance checks on 2026-10-09
+
+User-supplied CLI transcripts confirmed clarification followed by all-time revenue for products
+1 and 2, a product breakdown reconciling to 543.50, an unauthorized-product refusal, a contact-data
+refusal, a pseudonymous top-five ranking and one customer's monthly follow-up. Saving, reopening
+after a CLI restart, exact-ID deletion, rejection of missing confirmation tokens/plain `yes`,
+cancellation, and north/south report isolation were exercised. These are observed cases, not a
+claim that every natural-language request or production authentication has been validated.
+
+The south comparison of 2020–2023 with 2024–2026 returned 285.50/3 orders and 571.00/6 orders.
+Its original trace recorded two successful real BigQuery queries and an `UnsafeOutput` reporting
+failure. A reporter replay using their retained aggregate results reproduced a false rejection
+of inclusive calendar endpoints: December 31 was absent from the numerical allowlist for an
+exclusive January 1 end. The original rejected draft was not retained, so the replay establishes
+a reproducible defect, not the exact wording of the original failure.
+
+Validation now recognizes complete approved endpoint dates, including the preceding inclusive
+day, without adding those new date components to the business-number allowlist. English, French,
+ISO dates, leap days and rejection of unsupported dates/amounts are covered. Python also supplies
+an inclusive `period_label` for Gemini to copy, avoiding a reproduced ambiguous before/through
+formulation. Original evidence periods and query bounds are preserved. This still does not prove
+the semantic correctness of arbitrary model prose.
+
+A fresh full CLI Live run (`c05b100f66224f938b79270842db5f1e`) completed two BigQuery queries and
+two Gemini calls with no fallback, correct inclusive wording and unchanged values. Output is
+retained locally in ignored `runtime/live/comparison-cli-fixed.txt`. The full suite passed
+299 tests and 5 subtests; Ruff and whitespace checks passed. An already running CLI must be
+restarted to load the correction.
+
+### Automated end-to-end acceptance on 2026-10-09
+
+The acceptance driver operated real interactive CLI subprocesses through stdin/stdout, using
+the configured Gemini model and ADC-backed BigQuery. Each run used an isolated `APP_DATA_DIR`;
+existing user reports were not modified. Test confirmation tokens were redacted from retained
+transcripts. These are real cloud calls, not offline fixtures. Numerical expectations below
+describe the dataset observed that day and may change when the public dataset refreshes.
+
+| Case | Observed result |
+| --- | --- |
+| Clarification, six metrics and product follow-up | Missing time prompted clarification; all six north metrics matched 543.50 / 9 / 9 / 9 / 60.39 / 60.39; product revenues reconciled to the total with the same scope and period. |
+| Customer ranking and monthly follow-up | Five opaque references, sorted amounts of 69.50; selected customer's monthly revenue reconciled to its ranking amount. Unknown references did not execute queries. |
+| Product permissions and PII | Unauthorized product and instruction-injection requests executed no query. Contact-data refusal called neither the model nor BigQuery. South could neither list nor open north reports. |
+| Reports and process restart | Saved report reopened after a new CLI process. Preview, missing/wrong token, plain yes, cancellation, exact-ID confirmation, natural-language mention deletion and conversation deletion behaved as expected. Only isolated test reports were deleted. |
+| Two-period comparison | Products 3/4 returned 285.50 / 3 orders and 571.00 / 6 orders for the complete requested periods. Date coverage was checked separately from totals. |
+| Requested recommendations | Follow-up retained the comparison's dates/products and returned action items proposing investigation and comparable sub-periods, without asserting a proven cause. |
+| Empty and privacy-suppressed results | January 2050 stayed empty without broadening dates or inventing zero revenue. Product 3 in 2020–2023 suppressed one small group and disclosed the suppression. |
+| Schema, unsupported metric and reset | Four-table live schema available; undefined churn prompted clarification without a query; a new conversation cleared the analysis and prevented saving an old result. `/explain` made no provider calls. |
+| Streamlit with real providers | 16 AppTest checks passed: Live setup, six metric cards, no analysis on rerun, save/open, exact preview, hidden token, cancel/confirm, PII refusal, actor change, comparison and reset. This exercises actual Streamlit callbacks and real cloud dependencies; it is not browser visual automation. The running server's HTTP health endpoint also passed. |
+| Entry points and dependencies | Missing-key configuration exited safely before provider access; EOF emitted one session-ended message; offline scripted demo completed; dependency consistency and Ruff passed. |
+
+The first broad CLI run exposed a planner defect: one exclusive end was `2023-12-31`, omitting
+the requested final day, even though the available data yielded the same amounts. The service
+now enforces recognized, fully specified English/French/ISO calendar ranges before querying:
+it corrects the inclusive-to-exclusive conversion and rejects unrelated or omitted periods.
+Six application regression cases cover this boundary. This limited parser does not guarantee
+interpretation of every relative date, shorthand date or natural-language request.
+
+The broader run also exposed a recommendations refusal. Planner/reporter instructions now
+explicitly allow evidence-grounded next steps and preserve the prior analytical scope. The
+same follow-up then passed in the actual CLI with action items. A temporary model failure on
+the first empty-period run exhausted three reporter attempts and produced an explicitly
+labelled factual fallback. A later replay obtained a Gemini explanation. Consequently, live
+mode does not imply that a provider failure can never trigger the documented report fallback.
+
+An independently authored BigQuery query using inclusive date predicates matched all six north
+metrics, the top-five spending amounts, the south comparison and the empty future period.
+Nine original application jobs were inspected for successful completion and correct product
+parameters. The reference query processed 13,432,942 bytes. The final targeted CLI series
+passed 41 checks across 12 interactions, seven BigQuery queries and ten model calls, with no
+fallback. The full automated suite passed 305 tests and 5 subtests after the changes; injected
+timeouts, quota/access errors, stale/expired confirmations, transaction failures and concurrent
+deletions are covered there, rather than being represented as real external outages.
+
+Sanitized local artifacts are under ignored `runtime/acceptance-20261009/`:
+`cli-105304/acceptance.json` records the initial broad run and its failures;
+`cli-105304/bigquery-audit.json` holds the independent aggregate comparison;
+`cli-110207/acceptance.json` records the final targeted CLI pass;
+`streamlit-105929/acceptance.json` records the 16 passing Live UI checks;
+`entrypoints.json` records setup/exit/health checks. The acceptance scripts are retained beside
+those artifacts. Previously observed cosmetic citation variants and Windows interrupt-specific
+rendering were not fixed by this work; automated EOF/normal exits passed.
 
 ## Scenarios and expected results
 

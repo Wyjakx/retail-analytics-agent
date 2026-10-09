@@ -3,9 +3,10 @@ import math
 import pytest
 
 pytest.importorskip("streamlit")
-from retail_agent.streamlit_views import chart_data
+from retail_agent.streamlit_views import chart_data, _without_citations
 from retail_agent.service import TurnResult
 from streamlit.testing.v1 import AppTest
+from retail_agent.model import AnalystReport, deterministic_report
 
 
 def test_chart_sorts_months_without_recalculating_ratios():
@@ -64,3 +65,116 @@ render_result(st.session_state["result"], key_prefix="test")
     captions = " ".join(item.value for item in at.caption)
     assert "2025-01-01" in captions and "Products included: 1, 2" in captions
     assert "Synthetic" in captions and "Completeness is unknown" in captions
+
+
+def test_total_response_shows_evidence_metrics_and_collapses_details():
+    evidence = [{
+        "evidence_id": "bq-9016977c3a896563",
+        "columns": ["revenue", "orders", "purchasing_customers", "units",
+                    "average_order_value", "spend_per_customer"],
+        "rows": [{"revenue": 237.0, "orders": 4, "purchasing_customers": 4,
+                  "units": 4, "average_order_value": 59.25, "spend_per_customer": 59.25}],
+        "product_ids": [1, 2], "period": {"start": None, "end_exclusive": None},
+        "limit_reached": False,
+    }]
+    at = AppTest.from_string('''
+import streamlit as st
+from retail_agent.streamlit_views import render_result
+render_result(st.session_state["result"], key_prefix="test")
+''')
+    at.session_state["result"] = TurnResult(
+        "Analysis completed. Use /save TITLE to keep this report.",
+        report=AnalystReport(title="An analysis", summary="Here are your totals.",
+                             findings=["Revenue was 237.0 [bq-9016977c3a896563]."],
+                             caveats=["Amounts use dataset units."]),
+        evidence=evidence,
+    )
+    at.run()
+    assert not at.exception
+    assert [(m.label, m.value) for m in at.metric] == [
+        ("Revenue", "237.00"), ("Orders", "4"), ("Purchasing customers", "4"),
+        ("Units sold", "4"), ("Average order value", "59.25"), ("Spend per customer", "59.25"),
+    ]
+    panels = {panel.label: panel for panel in at.expander}
+    assert "View data and sources" in panels and "Scope and definitions" in panels
+    assert not panels["View data and sources"].proto.expanded
+    assert not panels["Scope and definitions"].proto.expanded
+    assert list(panels["View data and sources"].dataframe[0].value["revenue"]) == [237.0]
+    assert not any("/save" in item.value for item in at.text)
+
+
+def test_readable_fallback_keeps_exact_values_without_generic_recommendations():
+    report = deterministic_report([{
+        "evidence_id": "bq-9016977c3a896563", "product_ids": [1, 2],
+        "period": {"start": None, "end_exclusive": None},
+        "rows": [{"revenue": 237.0, "orders": 4, "purchasing_customers": 4,
+                  "units": 4, "average_order_value": 59.25, "spend_per_customer": 59.25}],
+    }])
+    assert "Revenue was 237.00." in report.summary
+    assert "4 orders" in report.summary and "4 purchasing customers" in report.summary
+    assert "4 units sold" in report.summary and "59.25" in report.summary
+    assert "revenue=" not in report.to_markdown()
+    assert "average_order_value" not in report.to_markdown()
+    assert report.action_items == []
+
+
+def test_fallback_is_disclosed_and_empty_or_grouped_results_do_not_invent_totals():
+    at = AppTest.from_string('''
+import streamlit as st
+from retail_agent.streamlit_views import render_result
+render_result(st.session_state["result"], key_prefix="test")
+''')
+    evidence = [{"columns": ["state", "average_order_value"],
+                 "rows": [{"state": "Texas", "average_order_value": 25.0}],
+                 "limit_reached": False}]
+    at.session_state["result"] = TurnResult(
+        "Analysis completed.", report=deterministic_report(evidence),
+        evidence=evidence, report_fallback=True,
+    )
+    at.run()
+    assert not at.exception and not at.metric
+    assert any("generated explanation is unavailable" in item.value for item in at.caption)
+    assert any("Period not specified" in item.value for item in at.caption)
+    assert not any("All time" in item.value for item in at.caption)
+    evidence[0]["rows"] = []
+    at.session_state["result"] = TurnResult(
+        "Analysis completed.", report=deterministic_report(evidence), evidence=evidence,
+        report_fallback=True,
+    )
+    at.run()
+    assert not at.exception and not at.metric
+    assert any("No eligible rows" in item.value for item in at.info)
+
+
+@pytest.mark.parametrize("citation", [
+    "[bq-9016977c3a896563]", "(bq-9016977c3a896563)",
+    "(evidence_id: bq-9016977c3a896563)",
+])
+def test_display_moves_only_exact_known_citations_to_the_source_panel(citation):
+    evidence = [{"evidence_id": "bq-9016977c3a896563"}]
+    assert _without_citations(f"Revenue was 237.0 {citation}.", evidence) == "Revenue was 237.0."
+    unknown = "Revenue [bq-9016977c3a896563-other]."
+    assert _without_citations(unknown, evidence) == unknown
+
+
+def test_fallback_summary_subset_warning_is_visible_even_without_query_truncation():
+    evidence = [{
+        "evidence_id": "bq-test", "columns": ["state", "revenue"],
+        "rows": [{"state": f"State {index}", "revenue": index * 10} for index in range(11)],
+        "result_limit": 50, "limit_reached": False,
+    }]
+    report = deterministic_report(evidence)
+    assert len(report.findings) == 10
+    at = AppTest.from_string('''
+import streamlit as st
+from retail_agent.streamlit_views import render_result
+render_result(st.session_state["result"], key_prefix="test")
+''')
+    at.session_state["result"] = TurnResult(
+        "Analysis completed.", report=report, evidence=evidence, report_fallback=True,
+    )
+    at.run()
+    assert not at.exception
+    assert any("summary displays a subset" in warning.value for warning in at.warning)
+    assert not any(panel.warning for panel in at.expander)
+    assert len(at.dataframe[0].value) == 11

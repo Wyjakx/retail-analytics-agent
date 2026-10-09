@@ -69,6 +69,54 @@ def fixed_decision(*products):
     ]))
 
 
+@pytest.mark.parametrize("question", [
+    "Show revenue from January 1, 2025 through January 31, 2025.",
+    "Show revenue from 2025-01-01 through 2025-01-31.",
+    "Montre le revenu du 1 janvier 2025 au 31 janvier 2025.",
+])
+def test_explicit_inclusive_end_is_enforced_before_query_execution(app_factory, question):
+    decision = Decision(action="analysis", plan=AnalysisPlan(queries=[QuerySpec(
+        metrics=["revenue"], start_date="2025-01-01", end_date="2025-01-31",
+    )]))
+    app, _, gateway, _ = app_factory(RecordingModel(decision=decision))
+    result = ask(app, question)
+    assert result.report is not None
+    assert gateway.executions[0][0]["end_date"] == "2025-02-01"
+    assert result.evidence[0]["period"]["end_exclusive"] == "2025-02-01"
+
+
+def test_comparison_enforces_each_explicit_calendar_range(app_factory):
+    decision = Decision(action="analysis", plan=AnalysisPlan(queries=[
+        QuerySpec(metrics=["revenue"], start_date="2025-01-01", end_date="2025-01-31"),
+        QuerySpec(metrics=["revenue"], start_date="2025-02-01", end_date="2025-03-01"),
+    ]))
+    app, _, gateway, _ = app_factory(RecordingModel(decision=decision))
+    result = ask(app, "Compare revenue from January 1, 2025 through January 31, 2025 "
+                 "versus February 1, 2025 through February 28, 2025.")
+    assert result.report is not None
+    assert [item[0]["end_date"] for item in gateway.executions] == ["2025-02-01", "2025-03-01"]
+
+
+def test_model_cannot_execute_an_unrelated_period_when_dates_are_explicit(app_factory):
+    decision = Decision(action="analysis", plan=AnalysisPlan(queries=[QuerySpec(
+        metrics=["revenue"], start_date="2025-01-01", end_date="2026-01-01",
+    )]))
+    app, _, gateway, _ = app_factory(RecordingModel(decision=decision))
+    result = ask(app, "Show revenue from January 1, 2025 through January 31, 2025.")
+    assert not gateway.executions
+    assert result.report is None
+
+
+def test_explicit_exclusive_end_is_not_extended(app_factory):
+    decision = Decision(action="analysis", plan=AnalysisPlan(queries=[QuerySpec(
+        metrics=["revenue"], start_date="2025-01-01", end_date="2025-02-01",
+    )]))
+    app, _, gateway, _ = app_factory(RecordingModel(decision=decision))
+    result = ask(app, "Show revenue from 2025-01-01 before 2025-02-01.")
+    assert result.report is not None
+    assert gateway.executions[0][0]["end_date"] == "2025-02-01"
+
+
 @pytest.fixture
 def app_factory(tmp_path):
     stores = []
@@ -283,7 +331,8 @@ def test_secret_in_model_report_uses_safe_fallback_before_display_and_save(
     result = ask(app, "Revenue in 2025")
     assert result.report and result.report.title == "Retail analysis"
     assert synthetic_secret not in result.report.to_markdown()
-    assert "revenue=900" in result.report.to_markdown()
+    assert "Revenue was 900.00" in result.report.to_markdown()
+    assert result.report_fallback is True
     assert "Saved report" in ask(app, "/save Safe fallback").message
     events = [json.loads(line) for line in app.traces.path.read_text().splitlines()]
     assert any(event["stage"] == "report_fallback" for event in events)
@@ -454,7 +503,8 @@ def test_unsafe_or_unsupported_report_uses_only_approved_evidence_fallback(app_f
     assert result.report is not None
     assert result.report.title == "Retail analysis"
     assert summary not in result.report.to_markdown()
-    assert "revenue=900" in result.report.to_markdown()
+    assert "Revenue was 900.00" in result.report.to_markdown()
+    assert result.report_fallback is True
     assert "generated summary could not be verified" in result.message
     events = [json.loads(line) for line in app.traces.path.read_text(encoding="utf-8").splitlines()]
     assert any(event["stage"] == "report_fallback" for event in events)
@@ -483,6 +533,25 @@ def test_verified_digit_leading_citation_keeps_model_report_and_normal_message(a
     result = ask(app, "Revenue in 2025")
     assert result.report.title == "Verified revenue report"
     assert result.message == "Analysis completed. Use /save TITLE to keep this report."
+    events = [json.loads(line) for line in app.traces.path.read_text(encoding="utf-8").splitlines()]
+    assert not any(event["stage"] == "report_fallback" for event in events)
+
+
+def test_valid_privacy_caveats_keep_model_report_in_the_application(app_factory):
+    class MetadataModel(RecordingModel):
+        async def report(self, question, evidence, metric_definitions):
+            await super().report(question, evidence, metric_definitions)
+            item = evidence[0]
+            return AnalystReport(
+                title="Verified metadata", summary="Revenue was 900.00.",
+                caveats=[f"Minimum group size: {item['statistics']['minimum_customers']}. "
+                         f"Suppressed groups: {item['suppressed_groups']}."],
+            )
+
+    app, _, _, _ = app_factory(model=MetadataModel())
+    result = ask(app, "Revenue in 2025")
+    assert result.report.title == "Verified metadata"
+    assert result.report_fallback is False
     events = [json.loads(line) for line in app.traces.path.read_text(encoding="utf-8").splitlines()]
     assert not any(event["stage"] == "report_fallback" for event in events)
 

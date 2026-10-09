@@ -18,6 +18,7 @@ from .analytics import (
     ScopeViolation, permitted_products,
 )
 from .config import ConfigurationError, Settings
+from .date_constraints import enforce_explicit_periods
 from .gateways import QueryBudget
 from .model import AnalystReport, AnalyticalModel, deterministic_report, starts_new_request
 from .reports import InvalidConfirmationError, PendingDeletion, Report, ReportStore, ReportStoreError
@@ -35,6 +36,7 @@ class Conversation:
     pending_clarification: list[dict[str, str]] = field(default_factory=list)
     previous_plan: AnalysisPlan | None = None
     last_report: AnalystReport | None = None
+    last_report_fallback: bool = False
     last_evidence: list[dict[str, Any]] = field(default_factory=list)
     last_products: tuple[int, ...] = ()
     scope_snapshot: tuple[int, ...] = ()
@@ -55,6 +57,7 @@ class TurnResult:
     request_id: str = ""
     saved_report: Report | None = None
     deletion_status: str | None = None
+    report_fallback: bool = False
 
 
 class AnalyticsService:
@@ -81,6 +84,7 @@ class AnalyticsService:
             self.context.pending_clarification.clear()
             self.context.previous_plan = None
             self.context.last_report = None
+            self.context.last_report_fallback = False
             self.context.last_evidence.clear()
             self.context.last_products = ()
             self.context.customer_refs.clear()
@@ -236,6 +240,7 @@ class AnalyticsService:
             report_question = "\nReply: ".join([
                 *(item["content"] for item in pending if item["role"] == "user"), question,
             ])
+        plan = enforce_explicit_periods(report_question, plan)
         return await self._analyze(report_question, plan, scope, budget, catalog, common)
 
     async def _analyze(
@@ -355,6 +360,7 @@ class AnalyticsService:
         self.context.previous_plan = plan
         self.context.pending_clarification.clear()
         self.context.last_report = report
+        self.context.last_report_fallback = report_fallback
         self.context.last_evidence = evidence
         self.context.last_products = tuple(sorted(used_products))
         self.context.customer_refs.update(
@@ -371,7 +377,8 @@ class AnalyticsService:
             if report_fallback else "Analysis completed. Use /save TITLE to keep this report."
         )
         return TurnResult(message,
-                          report=report, evidence=evidence, plan=plan)
+                          report=report, evidence=evidence, plan=plan,
+                          report_fallback=report_fallback)
 
     def _eligible_reports(self, scope: ActorScope, **filters: Any):
         reports = self.reports.list_reports(scope.actor_id, **filters)
@@ -391,6 +398,8 @@ class AnalyticsService:
             return TurnResult(
                 "The validated plan controls metrics, dates and grouping. Product permissions were "
                 "added by Python; the model did not supply executable SQL.",
+                report=self.context.last_report,
+                report_fallback=self.context.last_report_fallback,
                 plan=self.context.previous_plan, evidence=self.context.last_evidence,
             )
         save = re.fullmatch(r"/save(?:\s+(.+))?", text, re.I)

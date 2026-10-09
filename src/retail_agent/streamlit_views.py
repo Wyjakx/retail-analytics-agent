@@ -10,6 +10,10 @@ import streamlit as st
 from .analytics import METRIC_DEFINITIONS
 from .service import TurnResult
 from .web_session import WebSession
+from .report_formatting import (
+    METRIC_LABELS, DIMENSION_LABELS, SUMMARY_SUBSET_NOTICE, format_metric, period_label, total_row,
+    without_citations as _without_citations,
+)
 
 
 DIMENSIONS = {"month", "state", "country", "category", "product", "customer"}
@@ -43,19 +47,37 @@ def chart_data(evidence: dict[str, Any], metric: str) -> ChartData | None:
 
 
 def render_result(result: TurnResult, *, key_prefix: str) -> None:
-    st.text(result.message)
     if result.report:
-        st.markdown(result.report.to_markdown(), unsafe_allow_html=False)
+        if result.report_fallback:
+            st.caption("Showing verified results. The generated explanation is unavailable.")
+        st.markdown(_without_citations(result.report.summary, result.evidence), unsafe_allow_html=False)
+        _render_totals(result.evidence)
+        if result.report.findings:
+            if total_row(result.evidence) is not None:
+                with st.expander("Explanation"):
+                    _render_findings(result)
+            else:
+                _render_findings(result)
+        if result.report.action_items:
+            with st.expander("Suggested next steps"):
+                for suggestion in result.report.action_items:
+                    st.markdown("- " + _without_citations(suggestion, result.evidence), unsafe_allow_html=False)
+        if SUMMARY_SUBSET_NOTICE in result.report.caveats:
+            st.warning(SUMMARY_SUBSET_NOTICE + " Open View data and sources for all returned rows.")
+        if result.report.caveats:
+            with st.expander("Scope and definitions"):
+                for caveat in result.report.caveats:
+                    st.markdown("- " + caveat, unsafe_allow_html=False)
+    else:
+        st.text(result.message)
     if result.saved_report:
         st.text(result.saved_report.title)
         st.markdown(result.saved_report.body, unsafe_allow_html=False)
     if result.catalog:
         st.json(result.catalog)
-    for index, item in enumerate(result.evidence):
-        st.subheader(f"Evidence {index + 1}")
-        period = item.get("period", {})
-        start, end = period.get("start"), period.get("end_exclusive")
-        st.caption(f"{start} (inclusive) → {end} (exclusive)" if start and end else "Period: all time")
+    # Scope and data-quality warnings remain visible even with source tables closed.
+    for item in result.evidence:
+        st.caption("Period: " + period_label(item))
         products = item.get("product_ids")
         if products is None and result.saved_report:
             products = result.saved_report.evidence.get("product_ids")
@@ -73,19 +95,26 @@ def render_result(result: TurnResult, *, key_prefix: str) -> None:
                 st.caption(f"Result limit: {cap}. Completeness is unknown for this saved evidence.")
             else:
                 st.caption("Completeness is unknown for this saved evidence.")
-        rows = item.get("rows", [])
-        st.dataframe(rows, hide_index=True, width="stretch")
-        if not rows:
+        if not item.get("rows"):
             st.info("No eligible rows for this query.")
-        metrics = [name for name in item.get("columns", []) if name in METRIC_DEFINITIONS]
-        if metrics and len([c for c in item.get("columns", []) if c in DIMENSIONS]) == 1 and rows:
-            metric = st.selectbox("Chart metric", metrics, key=f"{key_prefix}:metric:{index}")
-            chart = chart_data(item, metric)
-            if chart:
-                if chart.kind == "line":
-                    st.line_chart(chart.rows, x=chart.x, y=chart.y)
-                else:
-                    st.bar_chart(chart.rows, x=chart.x, y=chart.y)
+    if result.evidence:
+        with st.expander("View data and sources"):
+            for index, item in enumerate(result.evidence):
+                if len(result.evidence) > 1:
+                    st.subheader(f"Result {index + 1} · {period_label(item)}")
+                st.caption(f"Source: {item.get('evidence_id', 'Unavailable')}")
+                st.dataframe(item.get("rows", []), hide_index=True, width="stretch",
+                             column_config={**METRIC_LABELS, **DIMENSION_LABELS})
+                metrics = [name for name in item.get("columns", []) if name in METRIC_DEFINITIONS]
+                if metrics and len([c for c in item.get("columns", []) if c in DIMENSIONS]) == 1 and item.get("rows"):
+                    metric = st.selectbox("Chart metric", metrics, key=f"{key_prefix}:metric:{index}",
+                                          format_func=lambda name: METRIC_LABELS[name])
+                    chart = chart_data(item, metric)
+                    if chart:
+                        if chart.kind == "line":
+                            st.line_chart(chart.rows, x=chart.x, y=chart.y)
+                        else:
+                            st.bar_chart(chart.rows, x=chart.x, y=chart.y)
     if result.request_id or result.plan or result.evidence:
         with st.expander("Analysis details"):
             if result.request_id:
@@ -94,6 +123,22 @@ def render_result(result: TurnResult, *, key_prefix: str) -> None:
                 st.json(result.plan.model_dump(mode="json"))
             for item in result.evidence:
                 st.text(f"Evidence: {item.get('evidence_id', 'unavailable')}")
+
+
+def _render_findings(result: TurnResult) -> None:
+    for finding in result.report.findings:
+        st.markdown("- " + _without_citations(finding, result.evidence), unsafe_allow_html=False)
+
+
+def _render_totals(evidence: list[dict[str, Any]]) -> None:
+    row = total_row(evidence)
+    if row is None:
+        return
+    values = [(metric, value) for metric, value in row.items() if metric in METRIC_LABELS
+              and type(value) in (int, float) and math.isfinite(value)]
+    for start in range(0, len(values), 3):
+        for column, (metric, value) in zip(st.columns(3), values[start:start + 3]):
+            column.metric(METRIC_LABELS[metric], format_metric(metric, value))
 
 
 def _library_action(action: str, operation_id: str = "") -> None:
