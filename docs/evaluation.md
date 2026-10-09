@@ -1,25 +1,30 @@
 # Evaluation
 
-The suite contains **20 tests**, chosen for consequences users would notice: incorrect answers, unauthorized data, exposed personal details, wasted cloud budget or lost reports. They exercise real application code with independently calculated answers. Cloud responses are simulated; these tests do not establish Gemini's understanding of natural language or execute SQL on BigQuery.
+The suite contains **24 tests**, chosen for consequences users would notice: incorrect answers, unauthorized data, exposed personal details, wasted cloud budget or lost reports. They exercise real application code with independently calculated answers. Cloud responses are simulated; these tests do not establish Gemini's understanding of natural language or execute SQL on BigQuery.
 
 ## Run
 
-Install `requirements-ui-lock.txt` and the local package as described in the [README](../README.md). Streamlit, development dependencies and the live Google SDKs are required even though the suite makes no network calls.
+Install `requirements-ui-lock.txt` and the local package as described in the [README](../README.md) to run the complete suite. Development dependencies and the live Google SDKs are required even though the suite makes no network calls. Without optional Streamlit, the UI module is skipped and the CLI/core suite still runs.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check src tests streamlit_app.py
 ```
 
-On 9 October 2026, Python 3.12.14 / Windows: **20 passed, zero skips, in 4.97 seconds**; Ruff passed. Immediately before this rewrite, the merged suite had **121 tests and took 22.10 seconds**. The older Streamlit branch's 305 tests had already been reduced by previous work. The current reduction is 121 to 20, not a new claim to have removed 305 tests.
+The original 9 October rewrite passed 20 tests in 4.97 seconds on Python 3.12.14 / Windows. Immediately before that rewrite, the merged suite had 121 tests and took 22.10 seconds; the older Streamlit branch's 305 tests had already been reduced by previous work. The rewrite reduced 121 to 20, not 305 to 20.
 
-There are 20 test functions across five files, without parametrized cases or hidden batches of independent scenarios. Related assertions follow one consequential workflow. CI runs pytest and Ruff on Python 3.12 / Ubuntu; local results do not establish the current CI result.
+The submission review found a lost follow-up clarification context and a rejection of valid mixed-period comparisons. Existing clarification/customer journeys now cover relevant plan snapshots and independent-request isolation. Four focused mixed-period workflows were added. The optional UI import was also corrected after reproducing CLI-only collection failure.
+
+Fresh verification on 9 October 2026, Python 3.12.10 / Windows: **24 passed, zero skips, in 8.58 seconds**; Ruff and dependency consistency checks passed. Simulating absent Streamlit gave **22 passed and one skipped module in 4.59 seconds**.
+
+There are 24 test functions across six files, without parametrized cases or hidden batches of independent scenarios. Related assertions follow one consequential workflow. CI runs pytest and Ruff on Python 3.12 / Ubuntu; local results do not establish the current CI result.
 
 ## Selected coverage
 
 | File | Tests | What a regression would break |
 | --- | ---: | --- |
 | `tests/test_critical_flows.py` | 10 | Six financial metrics; clarification and follow-up context; inclusive comparison dates; private customer analysis; input redaction; whole-plan authorization; grounded reporting; small-group suppression; recovery after provider outage; refusal to save incomplete comparisons |
+| `tests/test_date_constraints.py` | 4 | Explicit range compared with a calendar year or all time; inclusion of the last requested day; no query for a changed year; no silent omission of a mixed relative period |
 | `tests/test_report_lifecycle.py` | 5 | Persistence and current owner permissions; exact deletion consent and cancellation; simultaneous confirmations; transactional rollback and retry; consent surviving restart without extending expiry |
 | `tests/test_google_boundaries.py` | 2 | Real ADK/Gemini SDK wire compatibility; parameterized, scoped BigQuery submission with remaining deadline and cumulative actual billing |
 | `tests/test_streamlit_workflows.py` | 2 | Analysis, rerun, save, open, cancel and confirm through actual callbacks; removal of chat and open reports after permission revocation, followed by analysis under the new scope |
@@ -58,7 +63,7 @@ The interface tests use the application's seeded data, with product-1 revenue of
 
 This optional developer check first runs the normal suite, then introduces one defect at a time in memory in a fresh process and reruns its relevant test. It never edits production files. Collection, setup or teardown errors do not count as a detection. These are replays of the existing tests, not additional scenarios in the regular suite.
 
-The verified run detected **15/15 selected defects**:
+The run recorded before the submission-review fixes detected **15/15 selected defects**:
 
 - Including unauthorized revenue or dividing customer spend by the order count.
 - Revealing small groups, retaining a pasted secret or accepting a generated email address.
@@ -80,5 +85,9 @@ The rewrite removes repetitive unit tests, presentation snapshots and overlappin
 ## Live and human validation
 
 No new cloud calls were made for this test rewrite. [Live validation on 9 October](live-validation-2026-10-09.md) records separate checks against Gemini and BigQuery: follow-ups, comparisons, persisted reports, Streamlit and independent reference SQL. The SDK serialization, evidence-citation and date-boundary regressions found during previous Live work remain represented in this suite.
+
+A fresh check after the submission-review corrections ran the actual interactive CLI with two BigQuery queries and four Gemini calls, with no report fallback. All six product metrics matched independently authored SQL. An actual Streamlit AppTest session then made one live query, displayed six metric cards, saved/opened a report and cancelled/confirmed its exact deletion, with no fallback or analytical calls on rerun. A separately started Streamlit server passed its HTTP health check and was stopped. Test reports used isolated ignored storage. These checks used configured real providers; they remain targeted acceptance checks rather than broad language or production validation.
+
+Mixed comparisons can combine a full calendar range with a separately requested calendar year or explicit all time. A relative period combined with a full range must be restated as full calendar dates. The CLI and web service give this guidance before querying; requests without a full calendar range retain the planner's existing relative-date handling.
 
 A live release still needs checks of configured credentials/model, remote schemas, estimates and actual billing, plus independently written SQL for representative answers. An analyst must assess whether prose assigns each amount to the correct metric, segment and period, answers the question and avoids unsupported causal claims. Numeric-token validation and scripted provider responses cannot establish that. Production authentication, natural-language accuracy and usability require separate evaluation.

@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("streamlit", reason="Install requirements-ui-lock.txt to run the optional UI tests")
 from streamlit.testing.v1 import AppTest
 
 from retail_agent.config import Settings

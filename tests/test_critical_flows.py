@@ -3,6 +3,7 @@ import json
 import sqlite3
 from dataclasses import replace
 
+from retail_agent.model import OfflineModel
 from tests.scenarios import ask, plan, query, report
 
 
@@ -53,6 +54,19 @@ def test_clarification_and_followup_keep_the_original_product_and_period(applica
     assert followup.evidence[0]["product_ids"] == [1]
     assert not app.context.pending_clarification
 
+    provider.responses.extend([
+        {"action": "clarify", "message": "Should region mean state or country?"},
+        plan(query(dimensions=["state"])), report(),
+    ])
+    assert ask(app, "Show revenue by region in 2025").report is None
+    independent = ask(app, "state")
+    assert independent.evidence[0]["product_ids"] == [1, 2]
+    assert independent.evidence[0]["rows"] == [
+        {"state": "California", "revenue": 170}, {"state": "Texas", "revenue": 330},
+    ]
+    assert provider.payloads[-3]["previous_plan"] is None
+    assert not app.context.pending_clarification
+
 
 def test_comparison_includes_last_day_and_keeps_approved_calendar_dates(application, transactions):
     for item in transactions["order_items"]:
@@ -74,13 +88,31 @@ def test_comparison_includes_last_day_and_keeps_approved_calendar_dates(applicat
 
 
 def test_customer_ranking_and_monthly_report_keep_personal_details_private(application):
-    app, provider = application(plan(query(dimensions=["customer"], order_by="revenue", limit=3)), report())
+    app, provider = application(plan(query(product_ids=[1], dimensions=["customer"], order_by="revenue", limit=3)), report())
     rows = ask(app, "Top three customers by spending").evidence[0]["rows"]
     assert [row["revenue"] for row in rows] == [130, 110, 90]
     reference = rows[0]["customer"]
     assert reference.startswith("cust_") and len(reference) == 37
+    live_model = app.model
+    app.model = OfflineModel()
+    assert ask(app, "Show monthly revenue for the first customer").report is None
+    selected = ask(app, reference)
+    assert selected.report is not None
+    assert selected.evidence[0]["product_ids"] == [1]
+    assert selected.evidence[0]["period"] == {"start": "2025-01-01", "end_exclusive": "2025-03-01"}
+    assert selected.evidence[0]["rows"] == [
+        {"month": "2025-01", "revenue": 60}, {"month": "2025-02", "revenue": 70},
+    ]
+    assert not app.context.pending_clarification
+    ranking = ask(app, "Top 3 customers by spending")
+    assert ranking.report is not None
+    assert [row["revenue"] for row in ranking.evidence[0]["rows"]] == [130, 110, 90]
+    assert ranking.evidence[0]["product_ids"] == [1]
+    assert ranking.evidence[0]["period"] == {"start": "2025-01-01", "end_exclusive": "2025-03-01"}
+    assert app.gateway.executions[-1]["customer_refs"] is None
+    app.model = live_model
     provider.responses.extend([
-        plan(query(customer_refs=[reference], dimensions=["month"])),
+        plan(query(product_ids=[1], customer_refs=[reference], dimensions=["month"])),
         report("Contact private-buyer@example.invalid."),
     ])
     monthly = ask(app, f"Break down {reference} by month")

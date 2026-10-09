@@ -18,7 +18,7 @@ from .analytics import (
     ScopeViolation, permitted_products,
 )
 from .config import ConfigurationError, Settings
-from .date_constraints import enforce_explicit_periods
+from .date_constraints import DateConstraintError, enforce_explicit_periods
 from .gateways import QueryBudget
 from .model import AnalystReport, AnalyticalModel, deterministic_report, starts_new_request
 from .reports import InvalidConfirmationError, PendingDeletion, Report, ReportStore, ReportStoreError
@@ -34,6 +34,7 @@ class Conversation:
     conversation_id: str = field(default_factory=lambda: uuid4().hex)
     history: list[dict[str, str]] = field(default_factory=list)
     pending_clarification: list[dict[str, str]] = field(default_factory=list)
+    clarification_plan: AnalysisPlan | None = None
     previous_plan: AnalysisPlan | None = None
     last_report: AnalystReport | None = None
     last_report_fallback: bool = False
@@ -82,6 +83,7 @@ class AnalyticsService:
             # Revoke cached analytical context when policy changes.
             self.context.history.clear()
             self.context.pending_clarification.clear()
+            self.context.clarification_plan = None
             self.context.previous_plan = None
             self.context.last_report = None
             self.context.last_report_fallback = False
@@ -163,19 +165,25 @@ class AnalyticsService:
         refusal = privacy_refusal(text)
         if refusal:
             self.context.pending_clarification.clear()
+            self.context.clarification_plan = None
             self.traces.event(stage="input_policy", status="refused", reason="privacy", **common)
             return TurnResult(refusal)
         question = sanitize_input(text)
         for token in self.context.confirmation_tokens:
             question = question.replace(token, "[REDACTED_CONFIRMATION]")
-        had_pending_clarification = bool(self.context.pending_clarification)
-        if starts_new_request(question):
+        new_request = starts_new_request(question)
+        if new_request:
             self.context.pending_clarification.clear()
+            self.context.clarification_plan = None
         pending = self.context.pending_clarification
         if pending and (len(pending) + 2 > 6
                         or sum(len(item["content"]) for item in pending) + len(question) > 4000):
             pending.clear()
+            self.context.clarification_plan = None
             return TurnResult("Please provide one complete question, including the metric and period.")
+        previous_plan = (self.context.clarification_plan if pending else
+                         None if starts_new_request(question, preserve_ranking_context=True)
+                         else self.context.previous_plan)
         catalog = {
             "pending_clarification": [dict(item) for item in pending],
             "tables": self.gateway.schema_catalog(), "metrics": METRIC_DEFINITIONS,
@@ -192,7 +200,7 @@ class AnalyticsService:
                 with self.traces.stage("planning", attempt=attempt, **common):
                     decision = await self.model.plan(
                         question, self.context.history, catalog,
-                        None if had_pending_clarification or pending else self.context.previous_plan,
+                        previous_plan,
                         repair_error="invalid_plan" if attempt else None,
                     )
                 break
@@ -215,12 +223,18 @@ class AnalyticsService:
                     {"role": "assistant", "content": decision.message},
                 ]
                 if sum(len(item["content"]) for item in exchange) <= 4000 and len(exchange) <= 6:
+                    if not pending:
+                        self.context.clarification_plan = (
+                            previous_plan.model_copy(deep=True) if previous_plan else None
+                        )
                     self.context.pending_clarification = exchange
                 else:
                     pending.clear()
+                    self.context.clarification_plan = None
                     return TurnResult("Please provide one complete question, including the metric and period.")
             else:
                 pending.clear()
+                self.context.clarification_plan = None
             return TurnResult(decision.message)
         if decision.action == "schema":
             if hasattr(self.gateway, "validate_schema"):
@@ -240,7 +254,14 @@ class AnalyticsService:
             report_question = "\nReply: ".join([
                 *(item["content"] for item in pending if item["role"] == "user"), question,
             ])
-        plan = enforce_explicit_periods(report_question, plan)
+        try:
+            plan = enforce_explicit_periods(report_question, plan)
+        except DateConstraintError:
+            self.traces.event(stage="input_policy", status="refused", reason="dates", **common)
+            return TurnResult(
+                "The comparison periods could not be verified. Please restate them as full "
+                "calendar date ranges, calendar years, or explicitly all time."
+            )
         return await self._analyze(report_question, plan, scope, budget, catalog, common)
 
     async def _analyze(
@@ -359,6 +380,7 @@ class AnalyticsService:
         validate_text(report.to_markdown())
         self.context.previous_plan = plan
         self.context.pending_clarification.clear()
+        self.context.clarification_plan = None
         self.context.last_report = report
         self.context.last_report_fallback = report_fallback
         self.context.last_evidence = evidence

@@ -114,8 +114,9 @@ Do not invent churn definitions, causal explanations, results, or percentages.
 A repair_error is a sanitized validation code, not permission to bypass policy.
 catalog.pending_clarification contains an unresolved question and clarifying
 exchange, separate from successful history. Use it for short clarification
-answers. A new complete request replaces it; never inherit unrelated successful
-analysis constraints when resolving that exchange.
+answers. If previous_plan is supplied, it is the relevant analysis snapshot for
+that followup. A new complete request replaces the exchange; never inherit
+unrelated successful analysis constraints when resolving it.
 """
 
 REPORTER_INSTRUCTION = """Write an evidence-grounded retail analyst report.
@@ -219,9 +220,14 @@ def _plain(text: str) -> str:
     )
 
 
-def starts_new_request(text: str) -> bool:
-    """Recognize a replacement intent, not just a verb prefacing an answer."""
+def starts_new_request(text: str, *, preserve_ranking_context: bool = False) -> bool:
+    """Recognize replacements; a new ranking may retain the prior analytical scope."""
     text = _plain(text).strip()
+    if re.search(CUSTOMER_REFERENCE, text) or re.search(
+        r"\b(?:it|them)\b|\b(?:first|this|that|same|previous)\s+"
+        r"(?:customer|client|analysis|report|plan|product|period)\b", text,
+    ):
+        return False
     starter = re.match(
         r"^(?:(?:please|could you|can you|would you)\s+)*"
         r"(?:show|compare|give|what|which|top|list|calculate|analy[sz]e|"
@@ -234,8 +240,14 @@ def starts_new_request(text: str) -> bool:
         rf"depuis toujours|toute la periode|{UP_TO_DATE}|{THIS_MONTH}|{LAST_MONTH}|{YEAR_TO_DATE}",
         text,
     )
-    return bool(re.search(CUSTOMER_RANKING, text)
-                or (_metrics(text) and (_dimensions(text) or time_request)))
+    product_filter = re.search(
+        r"\b(?:products?|produits?)(?:\s+ids?)?\s*[:#]?\s*\d+", text,
+    )
+    if re.search(CUSTOMER_RANKING, text):
+        # A fresh population ranking replaces a pending question, but can reuse
+        # the period/products from the previous customer-specific analysis.
+        return bool(time_request or product_filter) if preserve_ranking_context else True
+    return bool(_metrics(text) and (_dimensions(text) or time_request or product_filter))
 
 
 UP_TO_DATE = r"up[ -]to[ -]date|a jour|jusqu.a aujourd.hui"
@@ -433,7 +445,6 @@ class OfflineModel:
                     parts[index] = ""
             # A textual boundary prevents a year reply from joining a product-ID list.
             text = "\nreply: ".join(parts)
-            previous_plan = None
         text = re.sub(r"\[redacted_(?:secret|confirmation|email|phone)\]", "", text)
         if re.search(r"email|e-mail|address|adresse|phone|telephone|customer.?id|user.?id|nom.*clients?|clients?.*nom|customers?.*names?|names?.*customers?", text):
             return Decision(action="refuse", message="Raw customer IDs and personal data are unavailable. Use supplied pseudonymous customer references instead.")
