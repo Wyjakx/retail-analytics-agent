@@ -6,7 +6,7 @@
 
 **Design:** Test meaningful user outcomes through the real service, installed ADK, arithmetic and SQLite. Script only external generation. Own an independent relational dataset with literal answers. Add focused Google wire-contract, real SQLite transaction and actual CLI process tests. Prove representative regressions fail the new suite.
 
-**Original scope (8 October):** Tests and testing documentation only in `codex/streamlit-design`; no product behavior, dependency changes, cloud calls, commit or push. No numerical target for the test count and no claim of equivalent branch coverage. **Superseded integration instruction (9 October):** the user requested merging all work. The cleanup and Streamlit corrections are now committed and being integrated into local `main`, following the [merge plan](2026-10-09-integrate-streamlit-and-tests.md).
+**Original scope (8 October):** Tests and testing documentation only in `codex/streamlit-design`; no product behavior, dependency changes, cloud calls, commit or push. No numerical target for the test count and no claim of equivalent branch coverage. **Superseding integration instruction (9 October):** the user requested merging all work. The cleanup and Streamlit corrections are now committed and integrated into local `main`, following the [completed merge plan](2026-10-09-integrate-streamlit-and-tests.md).
 
 ## Implementation
 

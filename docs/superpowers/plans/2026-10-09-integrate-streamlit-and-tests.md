@@ -14,8 +14,8 @@
 - [x] Retain useful UI/session, clarification and reporting regressions without restoring duplicate framework/spelling cases.
 - [x] Verify actual merged CLI, Streamlit callbacks and core battery: 121 scenarios pass with zero skips; 12/12 in-memory effectiveness probes detected. Ruff, dependency and whitespace checks pass.
 - [x] Complete an independent read-only integration review. Correct the probe's stale `_scope` method target to `refresh_scope`; re-review finds no remaining consequential integration issue. Source, entry point, dependencies and CI match `a160f9a`.
-- [ ] Commit the merge, fast-forward local `main`, and fast-forward the existing Streamlit branch to the same commit.
-- [ ] Confirm clean working trees, identical code in both directories and a passing final suite.
+- [x] Commit the merge as `40a673b`, fast-forward local `main`, and fast-forward the existing Streamlit branch to the same merged state.
+- [x] Confirm clean working trees and identical tracked code. Final pytest passes in both directories: 121 scenarios each, using each directory's own virtual environment and imported application. Ruff passes; final documentation is committed and synchronized too.
 
 ## Conflict decisions
 
