@@ -1,75 +1,99 @@
 # Evaluation
 
-The evaluation checks calculations, access controls and destructive actions before assessing report quality. The CLI and application integration are implemented and tested locally. An offline pass does not verify Gemini or BigQuery access.
+The automated battery checks observable application behavior: correct retail answers, authorized data, bounded cloud work and safe persistence. It runs locally without cloud credentials. It does not measure Gemini's understanding of natural language or execute SQL on BigQuery.
 
-## Reproduce the checks
+## Run the battery
 
-Follow the [setup instructions](../README.md) from the repository root. The complete suite requires the development dependencies and the live SDK dependencies, because ADK graph tests substitute a local fake model inside the real framework.
-
-On Windows, using the repository virtual environment:
+Install the frozen dependencies and local package as described in the [README](../README.md). The development and live SDK dependencies are needed: the tests exercise the installed ADK and Google SDK serialization even though network responses are simulated.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\retail-agent.exe --demo
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check src tests
 ```
 
-With that environment activated, the equivalent commands are `python -m pytest` and `retail-agent --demo`. The demo uses synthetic transactions and a simulated planner/reporter. It requires no API key or cloud credentials. It is a walkthrough of the application flow, not an evaluation of Gemini's language understanding or BigQuery's SQL engine.
+The rebuilt battery passed 52 scenarios on Python 3.12.14 / Windows on 8 October 2026. Ruff also passed. CI runs pytest and Ruff on Python 3.12 / Ubuntu; this local run does not establish the current CI result.
 
-| Run | Evidence at this development stage |
+| Test file | Scenarios | Observable contract |
+| --- | ---: | --- |
+| `tests/test_application.py` | 34 | Real ADK → service → arithmetic → SQLite; known answers, follow-ups, permissions, privacy, failures, save/delete and traces |
+| `tests/test_cloud_contracts.py` | 9 | Real ADK/Gemini SDK serialization and BigQuery job configuration; parameter binding, cost caps, cancellation, ambiguous submission and customer references |
+| `tests/test_storage_transactions.py` | 6 | Separate SQLite connections, racing confirmations, rollback, report revisions, restart/expiry and ownership |
+| `tests/test_cli.py` | 3 | Actual subprocesses: interactive save/cancel/reset, the complete demo and a useful startup error without credentials |
+
+Application tests substitute provider-generated JSON at the model boundary; ADK's graph, typed validation, service orchestration, filtering, arithmetic, permissions and SQLite remain real. An unexpected or unused provider response fails fixture cleanup so a fallback cannot conceal a broken script. BigQuery tests substitute the remote client/job boundary; the actual SQL compiler and SDK query parameters run. Two narrow application fault injections cover a failed second query and a known evidence-citation regression.
+
+CLI tests start fresh Python processes with a temporary data directory, no local `.env` and isolated application settings. Storage tests use real files and multiple connections, including a database trigger that fails during deletion to verify rollback of both the reports and the confirmation.
+
+## Independent known answers
+
+`tests/conftest.py` owns a small relational dataset, separate from the application's demo-data generator. Six customers buy in January and February. Two authorized products can appear in one order, so item, order and customer counts differ. Every order also contains an unauthorized product costing 1,000.
+
+| Authorized products 1 and 2, January–February 2025 | Expected answer |
+| --- | ---: |
+| Revenue | 500 |
+| Orders | 12 |
+| Purchasing customers | 6 |
+| Units | 14 |
+| Average order value | 41.67 |
+| Spend per purchasing customer | 83.33 |
+| January revenue / February revenue | 230 / 270 |
+| California revenue / Texas revenue | 170 / 330 |
+| Top three customer amounts | 130, 110, 90 |
+| Highest customer's January / February spending | 60 / 70 |
+| Unauthorized revenue that must be excluded | 12,000 |
+
+Expected answers are literal, independently calculated values. A separate follow-up scenario asks the real offline planner to compare product 1 by state and month, then narrow to Texas. It must retain the original dates and product scope. Boundary transactions distinguish UTC from local dates and inclusive starts from exclusive ends. Returned items, negative prices, broken joins and cancelled orders must not inflate revenue.
+
+The CLI demo still uses the application's own seeded data: product-1 revenue is 900 across 24 orders and 12 customers. Those demo figures are not the oracle for the independent application battery. Synthetic amounts have no asserted currency.
+
+## Consequential failure scenarios
+
+| Risk | Required outcome |
 | --- | --- |
-| Saved-report service | 17 tests verified locally, including concurrent confirmations and rollback |
-| Complete test suite | 182 tests and 5 subtests passed on Python 3.12.10 / Windows, 6 October 2026 |
-| Static checks and dependencies | Ruff passes; `pip check` reports no broken requirements |
-| Scripted CLI demo | Verified: comparison, follow-up, save, pseudonymous customer ranking and monthly follow-up, PII refusal, preview, plain-yes refusal, cancel and explicit confirmation |
-| Live Gemini stages | Real ADK planning and reporting passed with `gemini-3.5-flash-lite` after the structured-output compatibility correction |
-| Live BigQuery calculations | Four table schemas and US location verified; all six metrics matched independent SQL for authorized products 1 and 2, explicitly all time |
-| Live application service | One complete question → plan → parameterized BigQuery query → Gemini report passed with two model calls and no report fallback |
-| Live CLI | Normal ADC-based startup and the same six-metric all-time analysis passed with a Gemini report |
-| Broader live scenarios | Live follow-ups, multi-query comparisons and failure scenarios remain unverified |
+| Unauthorized product or excessive query plan | Reject the complete plan before its first query |
+| Raw SQL or injected sort direction in model output | Reject with bounded correction; never execute the supplied SQL |
+| Changed permissions | Clear prior analytical context, hide inaccessible reports and invalidate pending deletion; also check permissions after reporting |
+| Small aggregate groups | Remove them before the reporter sees evidence |
+| Customer analysis | Use actor-bound opaque references; follow-up selects the intended customer without exposing raw IDs, source contact details or the key |
+| Pasted credentials/contact details | Mask both configured secrets and unrelated Google-key patterns before provider input and history; exclude them from persisted evidence and traces |
+| Unsafe evidence/report/title | Stop unsafe evidence, replace an unsafe report with a visible grounded fallback, or refuse the save |
+| Valid opaque citation containing digits | Retain the verified report instead of rejecting citation digits as a business number |
+| Empty period | Permit one equivalent retry; never silently broaden dates |
+| Provider outage or deadline | Bound retries, share the six-call cap across planning/correction/reporting, cancel outstanding generation and allow the next question |
+| Failed second comparison query | Never save a partial result as a completed comparison |
+| Excessive cloud estimate or actual billing | Stop before submitting an unaffordable live job |
+| Remote timeout or ambiguous submission | Pass the remaining request deadline to BigQuery, cancel the identified job without a duplicate, and submit no billable job after cancellation during dry-run |
+| Destructive report command | Preview exact literal targets, require the issued token, mask it if pasted into a question, honor cancellation and keep reports created after preview |
+| Races, revision or expired consent | Commit one frozen outcome; reject changed or expired targets and enforce actor ownership |
+| Database failure during deletion | Roll back report removal and token consumption together; a valid retry can still succeed |
+| Trace I/O failure | Report the committed business outcome correctly and emit a diagnostic warning |
 
-The live calculations returned one approved product group and suppressed another with fewer than three purchasers. Each of the application and reference queries processed 13,418,810 bytes and recorded 41,943,040 billed bytes, within the 100 MB per-query cap. A separate product-1 query for 2025 returned no rows; that case was retained rather than silently broadening its period.
+## Verify that tests detect defects
 
-The initial live Python checks used a short-lived credential from an existing authenticated `gcloud` session, supplied directly to the test client. Google consent was then completed, ADC configured with the execution project's quota context, and the normal `retail-agent --live` CLI passed the same analysis. No credential was saved in source control. These checks establish a working analytical path for one case, not broad natural-language accuracy or production readiness.
+Run the optional effectiveness probes from the repository root:
 
-Gemini initially rejected the legacy schema's `additional_properties` field, then rejected the full JSON schema with array bounds. The runner now sends JSON Schema with `minItems`/`maxItems` omitted only from the provider copy. ADK and application Pydantic validation retain every original array bound and reject excess queries, products and report findings. This behavior is covered by the installed SDK wire-format and ADK graph tests.
+```powershell
+.\.venv\Scripts\python.exe -m tests.effectiveness
+```
 
-## Scenarios and expected results
+The command first requires a passing baseline. It then introduces one deliberate in-memory defect in a fresh process and runs the relevant acceptance test. It never edits production files. Collection, fixture or teardown errors do not count as successful detection.
 
-Use fixture calculations as independent expected answers, rather than checking only that a generated query or report exists. The seeded fixture has 12 purchasers, two monthly orders each, and both product 1 and product 3 in every order. Product 3 costs 500 per item and is outside the north analyst's permissions.
+The recorded run detected all 11 selected regressions: unauthorized revenue included, spend divided by orders instead of customers, small groups exposed, credential redaction removed, invented amounts accepted, revoked history retained, plan-budget preflight skipped, unsupported provider schema sent, BigQuery product predicate removed, partial deletion committed after failure, and confirmation accepted exactly at expiry. These probes demonstrate specific detection capabilities, not an exhaustive mutation score or proof that every defect is covered.
 
-For product 1 across January and February 2025, expect revenue 900, 24 orders, 12 purchasing customers, 24 units, scoped average order value 37.50 and spend per purchasing customer 75. January revenue is 300 and February revenue is 600. California contributes 360 and Texas 540 across both months. These amounts are synthetic and have no asserted currency. In particular, north-analyst revenue must exclude the 12,000 from product 3.
+## Admission criteria and deliberate omissions
 
-For customer spending in 2025, six customers each contribute 90 and six each contribute 60 within the permitted products. A top-five query returns five 90-valued rows, ordered before the limit; unauthorized product spending cannot affect their amounts or ranking. A selected 90-valued customer's monthly follow-up returns January 30 and February 60 using only its opaque reference.
+The earlier 121-case suite was replaced rather than merely regrouped. A new test must name a plausible regression and assert a consequence for answers, access, cost, recoverability or saved data. Keep one scenario per consequential behavior; parameterize genuinely distinct boundaries, and exercise related assertions in the same user flow. Do not derive expected answers with production helpers, snapshot incidental object structure or repeat every input spelling across layers.
 
-| Scenario | Expected check | Evaluation layer |
-| --- | --- | --- |
-| Arithmetic and dates | Verify the fixture answers above, UTC month grouping, inclusive start and exclusive end, status exclusions and empty periods. | Compiler and gateway tests; manual SQL comparison in a live run |
-| Mixed-product orders | Filter unauthorized items before summing revenue or counting scoped orders/customers. An explicit unauthorized product request fails. | Known-answer fixtures and scope tests |
-| Plan injection | Reject unknown metrics, identifier dimensions, raw SQL and extra fields. Treat filter strings as parameter values. | Typed-contract and compiler tests |
-| PII and small groups | Refuse identity/contact requests; omit raw customer IDs; suppress aggregate segments below the configured minimum. Explicitly approved pseudonymous individual analyses retain their scoped statistics. Reject contact patterns or identifier fields in returned evidence. | Adversarial fixtures, output checks and human review |
-| Pseudonymous customers | Verify stable keyed labels, actor separation, metric ordering before LIMIT and scoped monthly follow-ups. Unknown, copied or revoked references cannot broaden a query. Raw IDs, source PII and the key are absent from model payloads, saved evidence, explanations and traces. | HMAC/gateway tests, fake BigQuery rows and recording-model integration |
-| Identifier claims in reports | Raw-ID narrative and fabricated customer references trigger grounded fallback, even when the claimed number matches a valid metric. | Fake-reporter application regression tests |
-| Report grounding | Reject unsupported numerical claims. Review whether supported numbers are attributed to the correct metric, segment and period, and whether findings cite their evidence. | Output tests plus analyst review |
-| Multi-step and follow-up | Compare periods or segments using several bounded queries; a follow-up preserves prior dates/product filters unless explicitly changed. | Application integration and intent review |
-| Empty-result correction | Permit at most one equivalent correction; preserve permissions and requested scope. Distinguish no data from privacy suppression, then explain the limitation. | Injected empty returns and integration tests |
-| Syntax/schema failures | Stop safely on incompatible schemas. An erroneous compiled query cannot trigger unrestricted model SQL. Compiler defects require a code correction. | Injected gateway errors; live schema/query smoke check |
-| Dependency failures and costs | Bound transient model retries, request deadlines, query count and byte budgets. Keep the CLI usable after timeout, access denial or outage. | Fake model/client failures and application tests |
-| Partial comparisons | A later failed query cannot turn earlier evidence into a completed multi-query report. | Application regression test |
-| Trace-file failures | Logging I/O errors cannot crash the chat or misreport a committed deletion; emit a diagnostic warning instead. | Application regression test |
-| Saved reports | Check actor/conversation/mention selection; preview exact targets; require a separate confirmation; verify cancel, expiry, wrong actor/token and changed versions. | SQLite service tests and CLI walkthrough |
-| Concurrent report actions | New reports survive an old preview. Overlapping or simultaneous confirmations cannot broaden deletion. A commit failure rolls back deletion and token consumption together. | Separate SQLite connections and forced transaction failures |
-| Correlated traces | Link request, conversation, stage, evidence/query, report and deletion operation IDs; record outcomes, timings, retries and usage. Raw prompts, rows, report bodies and confirmation tokens must be absent. | Trace assertions using distinctive sensitive test markers |
-| Accidentally pasted credentials | Mask configured API/pseudonym secrets and standard Google API-key patterns before model input/history. Reject credential-like evidence, model reports and saved titles. Verify absence from SQLite and traces. | 16 application regression cases using synthetic secrets; local boolean-only check of the configured API key |
-| Opaque evidence citations | A verified citation with a digit-leading hash must not be treated as a business number. Its digits cannot authorize an invented amount; unknown or extended citations retain numeric checking. A fallback must be visible to the user. | 7 regression cases and a real CLI replay retaining the Gemini report |
+Dedicated simulator synonyms, ordinary Pydantic type/length checks, malformed internal fixture arguments, invalid internal deletion TTL values and exhaustive credential/citation spelling variants are intentionally omitted. The automated suite also does not claim complete schema-drift coverage or every cloud failure mode. The new battery does not preserve every branch covered by the deleted tests. Test count and line coverage are not measures of usefulness.
 
-Numerical-token validation is a limited check: a number present in the evidence can still be attached to the wrong fact, or described with the wrong unit. Contact-pattern detectors also do not prove that every possible personal detail is recognized. Credential redaction covers the configured secrets and standard Google API-key syntax; it is not a detector for every provider, token type or transformed representation. The application reduces exposure through approved aggregate fields, keyed customer pseudonyms and withholding raw identities; reviewer checks cover the remaining semantic gaps. Pseudonyms remain linkable. Empty/rejected-query correction is an equivalent-plan retry, not arbitrary SQL repair; compiler defects require source changes.
+## Live and human validation remain separate
 
-A live user run exposed a false rejection when the required citation `bq-7655e3b16480f29b` was scanned as the unsupported number `7655`. Only exact approved evidence IDs are now masked during numeric checking, after the contact, credential and identifier checks. A replay of the same six-metric product analysis with a ten-row limit retained the Gemini report and returned unchanged BigQuery facts. Other unverified reports still fall back, with an explicit message explaining that the generated summary could not be verified.
+Historical live checks, recorded before this reconstruction, verified a complete ADK/Gemini → BigQuery → report → CLI path with `gemini-3.5-flash-lite`. Four table schemas and US location were checked. All six all-time metrics for authorized products 1 and 2 matched independent SQL; one group was suppressed for fewer than three purchasers. Each application/reference query processed 13,418,810 bytes and recorded 41,943,040 billed bytes, within the 100 MB per-query cap. A product-1 query limited to 2025 returned no rows and retained its requested period. ADC-based CLI startup also succeeded. No new live calls were made during the test reconstruction.
 
-## Human review and live validation
+Those live checks exposed unsupported provider-schema serialization and the false rejection of a digit-leading citation (`bq-7655e3b16480f29b`). The new battery retains both regressions. Live follow-ups, multi-query comparisons and cloud failure scenarios remain unverified against the actual services.
 
-Ask an analyst to evaluate whether each report answers the requested question, states metric definitions and scope, distinguishes observed contributions from causes, and gives action items supported by the evidence. For churn, require an agreed definition and observation window before accepting a result. A plausible narrative alone is insufficient.
+Before relying on a live deployment, verify authentication, configured model, dataset schemas/location, dry-run estimates and actual billing. Compare approved calculations with independently written SQL, then exercise comparisons and follow-ups. Keep only sanitized evidence.
 
-Ask representative nontechnical users to find available analyses, clarify a missing period, narrow a follow-up, save a report and cancel or confirm deletion. Observe whether they understand synthetic-data labels, permissions, suppressed results and the exact deletion targets. Record task completion, mistakes and confusing wording; set performance targets from measured runs.
+An analyst must still assess whether the report answers the question, assigns amounts to the correct metric/segment/period, states scope and definitions, distinguishes observations from causes and supports its proposed actions. Numerical-token validation cannot establish those semantic claims. Contact/credential detectors do not recognize every possible sensitive representation, and customer pseudonyms remain linkable.
 
-A live smoke run must separately verify the configured Gemini model, authentication, four dataset schemas, dataset location, parameterized SQL, dry-run estimates and actual job statistics. Compare a small approved query with independently computed SQL, then test the multi-step and follow-up cases. Preserve only sanitized evaluation evidence. Golden retrieval, preference learning and persona administration require separate evaluation before their proposed production implementation is released.
+With representative users, observe clarification, narrowing a follow-up, saving, and cancelling/confirming deletion. Check comprehension of synthetic-data labels, permissions, suppressed results and exact deletion targets. Natural-language accuracy, usability and production authentication require separate evaluation.

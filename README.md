@@ -119,7 +119,7 @@ Customer references are HMAC-derived from an internal customer ID, the actor and
 .\.venv\Scripts\python.exe -m ruff check src tests
 ```
 
-The tests use independently specified numerical expectations, fake BigQuery clients, a fake model inside the installed ADK runtime, and the actual CLI/SQLite flow. [Evaluation](docs/evaluation.md) records the verified results and the remaining live/semantic review.
+The tests exercise application scenarios with independent transaction data and literal expected answers, the installed ADK/Google SDKs with simulated network responses, real SQLite transactions and actual CLI processes. Optional `python -m tests.effectiveness` probes verify that selected deliberate defects make the tests fail without editing source files. [Evaluation](docs/evaluation.md) records the contracts, verified results and remaining live/semantic review.
 
 GitHub Actions runs the same pytest and Ruff checks on pushes and pull requests using Python 3.12 and the frozen dependencies. The workflow has read-only repository permissions and uses no Gemini or Google Cloud credentials. Database execution and saved-report operations remain Python application services; the ADK stages expose no database or deletion tools.
 
