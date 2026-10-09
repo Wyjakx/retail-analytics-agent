@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 import math
 import os
 import re
@@ -98,6 +99,28 @@ def validate_evidence(evidence: list[dict[str, Any]]) -> None:
                     raise UnsafeOutput("A result contains a non-finite number.")
 
 
+def _without_approved_period_dates(content: str, plan: Any) -> str:
+    """Recognize whole calendar dates, without authorizing their digits as amounts."""
+    english = "January February March April May June July August September October November December".split()
+    french = "janvier février mars avril mai juin juillet août septembre octobre novembre décembre".split()
+    dates = set()
+    for spec in plan.queries:
+        if spec.start_date is not None and spec.end_date is not None:
+            dates.update((spec.start_date, spec.end_date, spec.end_date - timedelta(days=1)))
+    labels = set()
+    for day in dates:
+        labels.add(day.isoformat())
+        for month in (english[day.month - 1], french[day.month - 1]):
+            labels.update((
+                f"{month} {day.day}, {day.year}", f"{month} {day.day} {day.year}",
+                f"{day.day} {month} {day.year}",
+            ))
+    if labels:
+        alternatives = "|".join(re.escape(label) for label in sorted(labels, key=len, reverse=True))
+        content = re.sub(rf"(?<![\w-])(?:{alternatives})(?![\w-])", "[DATE]", content, flags=re.I)
+    return content
+
+
 def validate_report(report: Any, evidence: list[dict[str, Any]], plan: Any) -> None:
     """Reject unsupported direct numerical claims; derived statistics must enter evidence first."""
     content = "\n".join([
@@ -125,6 +148,7 @@ def validate_report(report: Any, evidence: list[dict[str, Any]], plan: Any) -> N
         content = re.sub(
             rf"(?<![\w-]){re.escape(evidence_id)}(?![\w-])", "[EVIDENCE]", content,
         )
+    content = _without_approved_period_dates(content, plan)
     allowed: set[float] = set()
 
     def add_number(value: Any) -> None:
@@ -144,6 +168,20 @@ def validate_report(report: Any, evidence: list[dict[str, Any]], plan: Any) -> N
         for row in item.get("rows", []):
             for value in row.values():
                 add_number(value)
+        # These fields come from the application-approved evidence, including
+        # the effective scope when the planner omits explicit product IDs.
+        # Never ingest arbitrary statistics, job IDs, timing or byte counts.
+        for product in item.get("product_ids", []):
+            if type(product) is int and product > 0:
+                add_number(product)
+        statistics = item.get("statistics", {})
+        if statistics.get("privacy_applied") is True:
+            minimum = statistics.get("minimum_customers")
+            if type(minimum) is int and minimum > 0:
+                add_number(minimum)
+            suppressed = item.get("suppressed_groups")
+            if type(suppressed) is int and suppressed >= 0:
+                add_number(suppressed)
     for spec in plan.queries:
         add_number(spec.limit)
         for period in (spec.start_date, spec.end_date):

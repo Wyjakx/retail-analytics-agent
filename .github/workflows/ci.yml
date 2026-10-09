@@ -22,10 +22,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements-lock.txt
+          cache-dependency-path: |
+            requirements-lock.txt
+            requirements-ui-lock.txt
 
       - name: Install frozen dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements-lock.txt
+        run: python -m pip install --disable-pip-version-check -r requirements-ui-lock.txt
 
       - name: Install local package
         run: python -m pip install --disable-pip-version-check --no-deps -e .
@@ -41,4 +43,4 @@ jobs:
         run: python -m pytest -q
 
       - name: Run Ruff
-        run: python -m ruff check src tests
+        run: python -m ruff check src tests streamlit_app.py

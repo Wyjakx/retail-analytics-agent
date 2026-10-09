@@ -144,11 +144,15 @@ def test_unsafe_report_is_replaced_before_display_and_save(application, monkeypa
     result = ask(app)
     assert result.report.title == "Retail analysis"
     assert unsafe not in result.report.to_markdown()
-    assert "revenue=500" in result.report.to_markdown()
+    assert "Revenue was 500.00" in result.report.to_markdown()
+    assert result.report_fallback is True
     assert "could not be verified" in result.message
     ask(app, "/save Verified fallback")
     stored = app.reports.list_reports("alice")[0]
-    assert "revenue=500" in stored.body and unsafe not in stored.body
+    assert "Revenue was 500.00" in stored.body and unsafe not in stored.body
+    explained = ask(app, "/explain")
+    assert explained.report == result.report and explained.report_fallback is True
+    assert explained.evidence == result.evidence
 
 
 def test_digit_leading_evidence_citation_keeps_the_valid_model_report(application):
@@ -307,6 +311,8 @@ def test_revoking_permissions_invalidates_previous_context_and_pending_delete(ap
     assert sent["history"] == [] and sent["previous_plan"] is None
     assert sent["catalog"]["allowed_customer_refs"] == []
     assert len(app.gateway.executions) == 1
+    explained = ask(app, "/explain")
+    assert explained.report is None and explained.evidence == []
     ask(app, "/save Revoked context")
     assert len(app.reports.list_reports("alice")) == 1
 
@@ -330,10 +336,12 @@ def test_saved_report_survives_restart_but_is_hidden_from_another_actor(applicat
     restarted, _ = application()
     assert [row["title"] for row in ask(restarted, "/reports").reports] == ["Quarterly review"]
     saved = restarted.reports.list_reports("alice")[0]
+    assert ask(restarted, f"/open {saved.report_id}").saved_report == saved
     assert saved.evidence["queries"][0]["rows"] == [{"revenue": 500}]
     other, provider = application(actor="bob")
     assert ask(other, "/reports").reports == []
     assert ask(other, f"/delete id {saved.report_id}").pending is None
+    assert ask(other, f"/open {saved.report_id}").saved_report is None
     assert provider.payloads == []
 
 
@@ -404,3 +412,45 @@ def test_unwritable_traces_cannot_misreport_a_committed_deletion(application, tm
     assert "Deleted 1" in result.message
     assert app.reports.list_reports("alice") == []
     assert "Trace recording is unavailable" in caplog.text
+
+
+@pytest.mark.parametrize("first_end", ["2025-01-31", "2025-02-01"], ids=["inclusive-conversion", "exclusive-kept"])
+def test_explicit_comparison_keeps_last_included_day_in_calculations(application, transactions, first_end):
+    # Put real purchases exactly on the last requested day: merely checking a
+    # rewritten plan would not prove that the executed amounts include them.
+    for item in transactions["order_items"]:
+        if "2025-01-15" in item["created_at"]:
+            item["created_at"] = "2025-01-31T23:59:59Z"
+    first = query(end_date=first_end)
+    second = query(start_date="2025-02-01")
+    app, _ = application(plan(first, second), report())
+    operator = "through 2025-01-31" if first_end.endswith("01-31") else "before 2025-02-01"
+    result = ask(app, f"Compare revenue from 2025-01-01 {operator} "
+                 "versus 2025-02-01 through 2025-02-28.")
+    assert [item["rows"] for item in result.evidence] == [[{"revenue": 230}], [{"revenue": 270}]]
+    assert [call["end_date"] for call in app.gateway.executions] == ["2025-02-01", "2025-03-01"]
+
+
+@pytest.mark.parametrize("proposed", [
+    [query(end_date="2026-01-01")],
+    [query(end_date="2025-02-01")],
+], ids=["wrong-period", "missing-period"])
+def test_model_cannot_replace_or_omit_an_explicit_comparison_period(application, proposed):
+    app, _ = application(plan(*proposed))
+    result = ask(app, "Compare revenue from 2025-01-01 through 2025-01-31 "
+                 "versus 2025-02-01 through 2025-02-28.")
+    assert result.report is None and app.gateway.executions == []
+
+
+def test_privacy_filter_cannot_hide_that_the_query_hit_its_row_limit(application, transactions):
+    # Alphabetical ordering selects a sparse group then Texas; a third group
+    # exists beyond LIMIT. Removing the sparse row must not imply completeness.
+    transactions["users"][0]["state"] = "Alaska"
+    transactions["users"][1]["state"] = "Wyoming"
+    transactions["users"][2]["state"] = "Wyoming"
+    app, _ = application(plan(query(dimensions=["state"], limit=2)), report())
+    result = ask(app)
+    item = result.evidence[0]
+    assert item["rows"] == [{"state": "Texas", "revenue": 330}]
+    assert item["suppressed_groups"] == 1 and item["limit_reached"] is True
+    assert item["result_limit"] == 2

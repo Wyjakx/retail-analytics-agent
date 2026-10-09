@@ -18,9 +18,10 @@ from .analytics import (
     ScopeViolation, permitted_products,
 )
 from .config import ConfigurationError, Settings
+from .date_constraints import enforce_explicit_periods
 from .gateways import QueryBudget
-from .model import AnalystReport, AnalyticalModel, deterministic_report
-from .reports import InvalidConfirmationError, PendingDeletion, ReportStore, ReportStoreError
+from .model import AnalystReport, AnalyticalModel, deterministic_report, starts_new_request
+from .reports import InvalidConfirmationError, PendingDeletion, Report, ReportStore, ReportStoreError
 from .safety import (
     UnsafeOutput, privacy_refusal, sanitize_input, validate_evidence, validate_report, validate_text,
 )
@@ -32,8 +33,10 @@ class Conversation:
     actor_id: str
     conversation_id: str = field(default_factory=lambda: uuid4().hex)
     history: list[dict[str, str]] = field(default_factory=list)
+    pending_clarification: list[dict[str, str]] = field(default_factory=list)
     previous_plan: AnalysisPlan | None = None
     last_report: AnalystReport | None = None
+    last_report_fallback: bool = False
     last_evidence: list[dict[str, Any]] = field(default_factory=list)
     last_products: tuple[int, ...] = ()
     scope_snapshot: tuple[int, ...] = ()
@@ -52,6 +55,9 @@ class TurnResult:
     reports: list[dict[str, str]] = field(default_factory=list)
     catalog: dict[str, list[str]] | None = None
     request_id: str = ""
+    saved_report: Report | None = None
+    deletion_status: str | None = None
+    report_fallback: bool = False
 
 
 class AnalyticsService:
@@ -68,15 +74,17 @@ class AnalyticsService:
         self.traces = traces
         self.scope_resolver = scope_resolver
 
-    def _scope(self) -> ActorScope:
+    def refresh_scope(self) -> ActorScope:
         scope = self.scope_resolver(self.context.actor_id)
         if scope.actor_id != self.context.actor_id:
             raise ScopeViolation("The policy actor does not match the conversation actor.")
         if self.context.scope_snapshot != scope.allowed_product_ids:
             # Revoke cached analytical context when policy changes.
             self.context.history.clear()
+            self.context.pending_clarification.clear()
             self.context.previous_plan = None
             self.context.last_report = None
+            self.context.last_report_fallback = False
             self.context.last_evidence.clear()
             self.context.last_products = ()
             self.context.customer_refs.clear()
@@ -146,7 +154,7 @@ class AnalyticsService:
         return result
 
     async def _handle(self, text: str, budget: QueryBudget, common: dict[str, Any]) -> TurnResult:
-        scope = self._scope()
+        scope = self.refresh_scope()
         if len(text) > 4000:
             return TurnResult("Please keep questions under 4,000 characters.")
         command = self._command(text, scope, common)
@@ -154,12 +162,22 @@ class AnalyticsService:
             return command
         refusal = privacy_refusal(text)
         if refusal:
+            self.context.pending_clarification.clear()
             self.traces.event(stage="input_policy", status="refused", reason="privacy", **common)
             return TurnResult(refusal)
         question = sanitize_input(text)
         for token in self.context.confirmation_tokens:
             question = question.replace(token, "[REDACTED_CONFIRMATION]")
+        had_pending_clarification = bool(self.context.pending_clarification)
+        if starts_new_request(question):
+            self.context.pending_clarification.clear()
+        pending = self.context.pending_clarification
+        if pending and (len(pending) + 2 > 6
+                        or sum(len(item["content"]) for item in pending) + len(question) > 4000):
+            pending.clear()
+            return TurnResult("Please provide one complete question, including the metric and period.")
         catalog = {
+            "pending_clarification": [dict(item) for item in pending],
             "tables": self.gateway.schema_catalog(), "metrics": METRIC_DEFINITIONS,
             "dimensions": ["month", "state", "country", "category", "product", "customer"],
             "allowed_product_ids": list(scope.allowed_product_ids),
@@ -173,7 +191,8 @@ class AnalyticsService:
             try:
                 with self.traces.stage("planning", attempt=attempt, **common):
                     decision = await self.model.plan(
-                        question, self.context.history, catalog, self.context.previous_plan,
+                        question, self.context.history, catalog,
+                        None if had_pending_clarification or pending else self.context.previous_plan,
                         repair_error="invalid_plan" if attempt else None,
                     )
                 break
@@ -190,6 +209,18 @@ class AnalyticsService:
             return TurnResult("No valid analysis plan was produced.")
         if decision.action in ("refuse", "clarify"):
             validate_text(decision.message)
+            if decision.action == "clarify":
+                exchange = [
+                    *pending, {"role": "user", "content": question},
+                    {"role": "assistant", "content": decision.message},
+                ]
+                if sum(len(item["content"]) for item in exchange) <= 4000 and len(exchange) <= 6:
+                    self.context.pending_clarification = exchange
+                else:
+                    pending.clear()
+                    return TurnResult("Please provide one complete question, including the metric and period.")
+            else:
+                pending.clear()
             return TurnResult(decision.message)
         if decision.action == "schema":
             if hasattr(self.gateway, "validate_schema"):
@@ -204,7 +235,13 @@ class AnalyticsService:
                 "Personal identity values are unavailable.", catalog=schema,
             )
         plan = AnalysisPlan.model_validate(decision.plan.model_dump())
-        return await self._analyze(question, plan, scope, budget, catalog, common)
+        report_question = question
+        if pending:
+            report_question = "\nReply: ".join([
+                *(item["content"] for item in pending if item["role"] == "user"), question,
+            ])
+        plan = enforce_explicit_periods(report_question, plan)
+        return await self._analyze(report_question, plan, scope, budget, catalog, common)
 
     async def _analyze(
         self, question: str, plan: AnalysisPlan, scope: ActorScope, budget: QueryBudget,
@@ -226,7 +263,7 @@ class AnalyticsService:
             evidence = []
             repairable = False
             for index, spec in enumerate(plan.queries):
-                if self._scope() != scope:
+                if self.refresh_scope() != scope:
                     raise ScopeViolation("Product permissions changed during the request.")
                 try:
                     with self.traces.stage("query", attempt=attempt, **common):
@@ -242,11 +279,13 @@ class AnalyticsService:
                         repairable = True
                         break
                     raise
-                if self._scope() != scope:
+                if self.refresh_scope() != scope:
                     raise ScopeViolation("Product permissions changed during the request.")
                 raw_empty = not outcome.rows
                 approved = outcome.approve_for_model(spec, self.settings.min_group_customers)
                 item = {**approved.to_dict(), "query_index": index,
+                        "result_limit": spec.limit, "limit_reached": len(outcome.rows) >= spec.limit,
+                        "product_ids": list(permitted_products(spec, scope)),
                         "period": {"start": str(spec.start_date) if spec.start_date else None,
                                    "end_exclusive": str(spec.end_date) if spec.end_date else None}}
                 evidence.append(item)
@@ -278,7 +317,7 @@ class AnalyticsService:
                 # A wider period/filter is a new user decision, never an automatic correction.
                 break
             plan = repair.plan
-        if self._scope() != scope:
+        if self.refresh_scope() != scope:
             raise ScopeViolation("Product permissions changed during analysis.")
         validate_evidence(evidence)
         if len(evidence) != len(plan.queries):
@@ -300,7 +339,7 @@ class AnalyticsService:
             self.traces.event(stage="report_fallback", status="completed", reason="unverified_synthesis", **common)
         finally:
             self._record_model(common)
-        if self._scope() != scope:
+        if self.refresh_scope() != scope:
             raise ScopeViolation("Product permissions changed during reporting.")
         # Keep essential definitions in every saved report, regardless of model wording.
         product_list = ", ".join(str(product) for product in sorted(used_products)[:20])
@@ -319,7 +358,9 @@ class AnalyticsService:
         report = report.model_copy(update={"caveats": (context_caveats + report.caveats)[:8]})
         validate_text(report.to_markdown())
         self.context.previous_plan = plan
+        self.context.pending_clarification.clear()
         self.context.last_report = report
+        self.context.last_report_fallback = report_fallback
         self.context.last_evidence = evidence
         self.context.last_products = tuple(sorted(used_products))
         self.context.customer_refs.update(
@@ -336,7 +377,8 @@ class AnalyticsService:
             if report_fallback else "Analysis completed. Use /save TITLE to keep this report."
         )
         return TurnResult(message,
-                          report=report, evidence=evidence, plan=plan)
+                          report=report, evidence=evidence, plan=plan,
+                          report_fallback=report_fallback)
 
     def _eligible_reports(self, scope: ActorScope, **filters: Any):
         reports = self.reports.list_reports(scope.actor_id, **filters)
@@ -356,6 +398,8 @@ class AnalyticsService:
             return TurnResult(
                 "The validated plan controls metrics, dates and grouping. Product permissions were "
                 "added by Python; the model did not supply executable SQL.",
+                report=self.context.last_report,
+                report_fallback=self.context.last_report_fallback,
                 plan=self.context.previous_plan, evidence=self.context.last_evidence,
             )
         save = re.fullmatch(r"/save(?:\s+(.+))?", text, re.I)
@@ -366,6 +410,8 @@ class AnalyticsService:
             title = (save or natural_save).group(1) or self.context.last_report.title
             if not 1 <= len(title) <= 120:
                 return TurnResult("Choose a report title between 1 and 120 characters.")
+            if any(token in title for token in self.context.confirmation_tokens):
+                raise UnsafeOutput("A confirmation token cannot be used in a report title.")
             validate_text(title)
             report = self.reports.save(
                 scope.actor_id, self.context.conversation_id, title,
@@ -380,6 +426,21 @@ class AnalyticsService:
                 {"id": report.report_id, "title": report.title, "conversation": report.conversation_id}
                 for report in reports
             ])
+        open_report = re.fullmatch(r"/open\s+([a-f0-9]{32})", text, re.I)
+        if open_report:
+            matches = [report for report in self._eligible_reports(scope)
+                       if report.report_id == open_report.group(1).lower()]
+            if not matches:
+                return TurnResult("Report unavailable within current product permissions.")
+            report = matches[0]
+            validate_text(report.body)
+            queries = report.evidence.get("queries")
+            if not isinstance(queries, list):
+                raise UnsafeOutput("Saved evidence is invalid.")
+            validate_evidence(queries)
+            self.traces.event(stage="open_report", status="completed",
+                              report_id=report.report_id, **common)
+            return TurnResult("Saved report.", saved_report=report, evidence=queries)
         if lower.startswith("/confirm"):
             parts = text.split(maxsplit=1)
             pending = self.context.pending
@@ -388,7 +449,7 @@ class AnalyticsService:
             outcome = self.reports.confirm_delete(scope.actor_id, pending.operation_id, parts[1])
             self.traces.event(stage="delete_report", status=outcome.status,
                               operation_id=outcome.operation_id, **common)
-            return TurnResult(outcome.message)
+            return TurnResult(outcome.message, deletion_status=outcome.status)
         if lower in ("/cancel", "cancel deletion"):
             pending = self.context.pending
             if pending is None or pending.operation_id is None:
@@ -396,7 +457,7 @@ class AnalyticsService:
             outcome = self.reports.cancel_delete(scope.actor_id, pending.operation_id)
             self.traces.event(stage="delete_report", status=outcome.status,
                               operation_id=outcome.operation_id, **common)
-            return TurnResult(outcome.message)
+            return TurnResult(outcome.message, deletion_status=outcome.status)
         conversation_delete = lower == "/delete conversation" or bool(re.fullmatch(
             r"delete all (?:the )?reports (?:we made )?in this conversation", lower,
         ))
@@ -415,6 +476,9 @@ class AnalyticsService:
                 matches = [report for report in matches if report.report_id == id_delete.group(1)]
             if not matches:
                 return TurnResult("No matching owned reports within current product permissions.")
+            previous = self.context.pending
+            if previous and previous.operation_id:
+                self.reports.cancel_delete(scope.actor_id, previous.operation_id)
             pending = self.reports.preview_delete(scope.actor_id, report_ids=[r.report_id for r in matches])
             self.context.pending = pending
             if pending.token:

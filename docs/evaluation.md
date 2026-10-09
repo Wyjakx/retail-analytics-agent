@@ -4,23 +4,29 @@ The automated battery checks observable application behavior: correct retail ans
 
 ## Run the battery
 
-Install the frozen dependencies and local package as described in the [README](../README.md). The development and live SDK dependencies are needed: the tests exercise the installed ADK and Google SDK serialization even though network responses are simulated.
+Install `requirements-ui-lock.txt` and the local package as described in the [README](../README.md). The complete suite needs Streamlit as well as the development and live SDK dependencies: it exercises actual Streamlit callbacks, ADK and Google SDK serialization even though network responses are simulated.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m ruff check src tests
+.\.venv\Scripts\python.exe -m ruff check src tests streamlit_app.py
 ```
 
-The rebuilt battery passed 52 scenarios on Python 3.12.14 / Windows on 8 October 2026. Ruff also passed. CI runs pytest and Ruff on Python 3.12 / Ubuntu; this local run does not establish the current CI result.
+The merged battery passed **121 scenarios, zero skips**, on Python 3.12.14 / Windows on 9 October 2026. It combines the 52-case core battery with new explicit-date regressions and the Streamlit, clarification and reporting contracts. The pre-merge Streamlit suite had 305 tests and 5 subtests; it is superseded by this unified battery. The earlier 121-case pruning stage covered a different, older application and is not this suite. CI runs pytest and Ruff on Python 3.12 / Ubuntu with Streamlit installed; local verification does not establish the current CI result.
 
 | Test file | Scenarios | Observable contract |
 | --- | ---: | --- |
-| `tests/test_application.py` | 34 | Real ADK → service → arithmetic → SQLite; known answers, follow-ups, permissions, privacy, failures, save/delete and traces |
+| `tests/test_application.py` | 39 | Real ADK → service → arithmetic → SQLite; known answers, follow-ups, permissions, privacy, failures, save/delete, dates and traces |
 | `tests/test_cloud_contracts.py` | 9 | Real ADK/Gemini SDK serialization and BigQuery job configuration; parameter binding, cost caps, cancellation, ambiguous submission and customer references |
 | `tests/test_storage_transactions.py` | 6 | Separate SQLite connections, racing confirmations, rollback, report revisions, restart/expiry and ownership |
 | `tests/test_cli.py` | 3 | Actual subprocesses: interactive save/cancel/reset, the complete demo and a useful startup error without credentials |
+| `tests/test_clarifications.py` | 8 | Complete or replace a pending question without restoring stale scope or exposing private context |
+| `tests/test_report_metadata.py` | 6 | Accept actual scope, privacy metadata and inclusive dates; reject amounts/dates unsupported by the evidence |
+| `tests/test_streamlit_ui.py` | 21 | Actual AppTest callbacks: reruns, actor isolation, permissions, reports, confirmation and reset |
+| `tests/test_web_session.py` | 10 | Thread-owned SQLite, overlapping operations, transient state, permission races and operation-bound consent |
+| `tests/test_streamlit_views.py` | 11 | Actual rendered metrics, sources and warnings; charts retain ratios and reject ambiguous data |
+| `tests/test_cli_presentation.py` | 8 | Readable totals, full diagnostic output, narrow-terminal references and literal untrusted text |
 
-Application tests substitute provider-generated JSON at the model boundary; ADK's graph, typed validation, service orchestration, filtering, arithmetic, permissions and SQLite remain real. An unexpected or unused provider response fails fixture cleanup so a fallback cannot conceal a broken script. BigQuery tests substitute the remote client/job boundary; the actual SQL compiler and SDK query parameters run. Two narrow application fault injections cover a failed second query and a known evidence-citation regression.
+Application tests substitute provider-generated JSON at the model boundary; ADK's graph, typed validation, service orchestration, filtering, arithmetic, permissions and SQLite remain real. An unexpected or unused provider response fails fixture cleanup so a fallback cannot conceal a broken script. BigQuery tests substitute the remote client/job boundary; the actual SQL compiler and SDK query parameters run. Narrow application fault injections cover a failed second query, a known evidence-citation regression and operational billing metadata.
 
 CLI tests start fresh Python processes with a temporary data directory, no local `.env` and isolated application settings. Storage tests use real files and multiple connections, including a database trigger that fails during deletion to verify rollback of both the reports and the confirmation.
 
@@ -58,6 +64,8 @@ The CLI demo still uses the application's own seeded data: product-1 revenue is 
 | Pasted credentials/contact details | Mask both configured secrets and unrelated Google-key patterns before provider input and history; exclude them from persisted evidence and traces |
 | Unsafe evidence/report/title | Stop unsafe evidence, replace an unsafe report with a visible grounded fallback, or refuse the save |
 | Valid opaque citation containing digits | Retain the verified report instead of rejecting citation digits as a business number |
+| Explicit date range | Include the last requested day in actual calculations, preserve an exclusive end, and execute no query for unrelated or omitted comparison periods |
+| Report context | Accept actual scope/privacy metadata and inclusive calendar dates without turning operational statistics or date components into revenue |
 | Empty period | Permit one equivalent retry; never silently broaden dates |
 | Provider outage or deadline | Bound retries, share the six-call cap across planning/correction/reporting, cancel outstanding generation and allow the next question |
 | Failed second comparison query | Never save a partial result as a completed comparison |
@@ -67,6 +75,9 @@ The CLI demo still uses the application's own seeded data: product-1 revenue is 
 | Races, revision or expired consent | Commit one frozen outcome; reject changed or expired targets and enforce actor ownership |
 | Database failure during deletion | Roll back report removal and token consumption together; a valid retry can still succeed |
 | Trace I/O failure | Report the committed business outcome correctly and emit a diagnostic warning |
+| Browser rerun or second session | Never repeat a submitted analysis on rerun; share only authorized saved reports and isolate conversation state |
+| Browser reset or permission change | Clear inaccessible chat, open reports and confirmation state, including changes during result presentation |
+| Chart or compact presentation | Preserve each approved ratio and reference; disclose suppression, result limits and fallback without inventing totals |
 
 ## Verify that tests detect defects
 
@@ -78,7 +89,7 @@ Run the optional effectiveness probes from the repository root:
 
 The command first requires a passing baseline. It then introduces one deliberate in-memory defect in a fresh process and runs the relevant acceptance test. It never edits production files. Collection, fixture or teardown errors do not count as successful detection.
 
-The recorded run detected all 11 selected regressions: unauthorized revenue included, spend divided by orders instead of customers, small groups exposed, credential redaction removed, invented amounts accepted, revoked history retained, plan-budget preflight skipped, unsupported provider schema sent, BigQuery product predicate removed, partial deletion committed after failure, and confirmation accepted exactly at expiry. These probes demonstrate specific detection capabilities, not an exhaustive mutation score or proof that every defect is covered.
+The merged run detected **12/12 deliberate regressions**: unauthorized revenue included, spend divided by orders instead of customers, small groups exposed, credential redaction removed, invented amounts accepted, revoked history retained, plan-budget preflight skipped, unsupported provider schema sent, BigQuery product predicate removed, partial deletion committed after failure, confirmation accepted exactly at expiry, and omission of the final requested calendar day. These probes demonstrate specific detection capabilities, not an exhaustive mutation score or proof that every defect is covered.
 
 ## Admission criteria and deliberate omissions
 
@@ -90,7 +101,7 @@ Dedicated simulator synonyms, ordinary Pydantic type/length checks, malformed in
 
 Historical live checks, recorded before this reconstruction, verified a complete ADK/Gemini → BigQuery → report → CLI path with `gemini-3.5-flash-lite`. Four table schemas and US location were checked. All six all-time metrics for authorized products 1 and 2 matched independent SQL; one group was suppressed for fewer than three purchasers. Each application/reference query processed 13,418,810 bytes and recorded 41,943,040 billed bytes, within the 100 MB per-query cap. A product-1 query limited to 2025 returned no rows and retained its requested period. ADC-based CLI startup also succeeded. No new live calls were made during the test reconstruction.
 
-Those live checks exposed unsupported provider-schema serialization and the false rejection of a digit-leading citation (`bq-7655e3b16480f29b`). The new battery retains both regressions. Live follow-ups, multi-query comparisons and cloud failure scenarios remain unverified against the actual services.
+Those early Live checks exposed unsupported provider-schema serialization and the false rejection of a digit-leading citation (`bq-7655e3b16480f29b`). The battery retains both regressions. Subsequent [Live validation on 9 October](live-validation-2026-10-09.md) exercised follow-ups, multi-query comparisons, recommendations, persisted reports and Streamlit against the real providers, with independent SQL comparisons. It also found date-boundary defects now retained in the merged application and acceptance tests. External outage cases are simulated; no new cloud calls were made just to merge the branches.
 
 Before relying on a live deployment, verify authentication, configured model, dataset schemas/location, dry-run estimates and actual billing. Compare approved calculations with independently written SQL, then exercise comparisons and follow-ups. Keep only sanitized evidence.
 

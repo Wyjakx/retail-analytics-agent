@@ -4,22 +4,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from dataclasses import replace
 import logging
 import sys
 
 from rich.console import Console
-from rich.markdown import Markdown
-from rich.table import Table
-from rich.text import Text
 
-from .config import ConfigurationError, Settings, load_pseudonym_key, resolve_scope
-from .gateways import BigQueryGateway, OfflineGateway
-from .model import GeminiModel, OfflineModel
-from .pseudonyms import CustomerPseudonymizer
+from .config import ConfigurationError, Settings, resolve_scope
 from .reports import ReportStore
-from .service import AnalyticsService, Conversation, TurnResult
-from .telemetry import TraceRecorder
+from .service import AnalyticsService, Conversation
+from .cli_views import present
+from .runtime import build_runtime
 
 
 HELP = """Ask a retail question with a date range (or explicitly 'all time').
@@ -29,80 +23,28 @@ Customer ranking: Top 5 customers by spending in 2025.
 Customer follow-up: Break down cust_FROM_THE_RESULTS by month.
 /save TITLE                 Save the last grounded report
 /reports                    List your accessible saved reports
+/open REPORT_ID             Read an accessible saved report
 /delete conversation        Preview this conversation's reports
 /delete mention TEXT        Preview reports with a literal mention
 /delete id REPORT_ID        Preview a specific owned report
 /confirm TOKEN              Confirm only the exact frozen preview
 /cancel                     Cancel the pending deletion
-/explain                    Inspect the last validated plan and evidence
+/explain                    Full report, definitions, sources and plan
 /new                        Start a new conversation
 /help                       Show commands
 /quit                       Exit
 """
 
 
-def present(console: Console, result: TurnResult, show_plan: bool = False) -> None:
-    console.print(result.message, markup=False)
-    if result.report:
-        console.print(Markdown(result.report.to_markdown()))
-    if result.catalog:
-        table = Table("Table", "Approved columns")
-        for name, columns in result.catalog.items():
-            table.add_row(name, ", ".join(columns))
-        console.print(table)
-    for index, evidence in enumerate(result.evidence):
-        table = Table(title=f"Evidence {index + 1}: {evidence['evidence_id']}")
-        columns = evidence["columns"]
-        for column in columns:
-            table.add_column(column, overflow="fold")
-        for row in evidence["rows"]:
-            table.add_row(*(Text(str(row.get(column, ""))) for column in columns))
-        console.print(table)
-        if evidence.get("suppressed_groups"):
-            console.print("Small groups were suppressed for privacy.", markup=False)
-    if result.reports:
-        table = Table()
-        table.add_column("Report ID", overflow="fold")
-        table.add_column("Title", overflow="fold")
-        for report in result.reports:
-            table.add_row(Text(report["id"]), Text(report["title"]))
-        console.print(table)
-    if result.pending:
-        table = Table()
-        table.add_column("Report ID", overflow="fold")
-        table.add_column("Exact title", overflow="fold")
-        table.add_column("Version")
-        for target in result.pending.targets:
-            table.add_row(Text(target.report_id), Text(target.title), str(target.version))
-        console.print(table)
-        console.print(f"Type /confirm {result.pending.token} to delete this frozen selection.", markup=False)
-        console.print("The confirmation expires after five minutes. /cancel leaves reports intact.", markup=False)
-    if show_plan and result.plan:
-        console.print_json(result.plan.model_dump_json(indent=2))
-    if result.request_id:
-        console.print(f"Request: {result.request_id}", style="dim", markup=False)
-
-
 async def run_chat(args: argparse.Namespace, console: Console) -> None:
-    settings = Settings.load(args.env_file)
     mode_directory = "demo" if args.demo else "live" if args.live else "offline"
-    settings = replace(settings, data_dir=settings.data_dir / mode_directory)
-    resolve_scope(args.actor, settings.permissions_file)
-    if args.live:
-        settings.validate_live()
-    pseudonymizer = CustomerPseudonymizer(load_pseudonym_key(settings))
-    if args.live:
-        model = GeminiModel(settings.model, timeout_seconds=settings.query_timeout,
-                            max_retries=settings.max_model_retries)
-        gateway = BigQueryGateway(settings.dataset, settings.project, settings.query_timeout,
-                                  settings.max_query_bytes, pseudonymizer=pseudonymizer)
-    else:
-        model, gateway = OfflineModel(), OfflineGateway(pseudonymizer=pseudonymizer)
+    runtime = build_runtime(args.actor, mode_directory, Settings.load(args.env_file))
+    settings, model, gateway = runtime.settings, runtime.model, runtime.gateway
     context = Conversation(args.actor)
     with ReportStore(settings.data_dir / "reports.sqlite3") as store:
         service = AnalyticsService(
             settings, context, model, gateway, store,
-            TraceRecorder(settings.data_dir / "events.jsonl"),
+            runtime.traces,
             lambda actor: resolve_scope(actor, settings.permissions_file),
         )
         console.print("Retail Analytics Agent", style="bold")
@@ -111,7 +53,9 @@ async def run_chat(args: argparse.Namespace, console: Console) -> None:
             if args.live else "OFFLINE: synthetic data + simulated keyword planning; no cloud calls.",
             markup=False,
         )
-        console.print(f"Actor: {args.actor}; conversation: {context.conversation_id}", markup=False)
+        console.print(f"Actor: {args.actor}", markup=False)
+        if args.show_plan:
+            console.print(f"Conversation: {context.conversation_id}", style="dim", markup=False)
         if args.demo:
             questions = [
                 "What tables and data are available?",
@@ -138,7 +82,8 @@ async def run_chat(args: argparse.Namespace, console: Console) -> None:
                 present(console, await service.handle(f"/confirm {pending.token}"), args.show_plan)
             return
         if args.question:
-            present(console, await service.handle(args.question), args.show_plan)
+            present(console, await service.handle(args.question),
+                    args.show_plan or args.question.strip().casefold() in ("/explain", "explain last analysis"))
             return
         console.print("Type /help for commands.", markup=False)
         while True:
@@ -157,7 +102,8 @@ async def run_chat(args: argparse.Namespace, console: Console) -> None:
                 console.print(f"New conversation: {service.context.conversation_id}", markup=False)
                 continue
             if question:
-                present(console, await service.handle(question), args.show_plan or question == "/explain")
+                present(console, await service.handle(question),
+                        args.show_plan or question.casefold() in ("/explain", "explain last analysis"))
 
 
 def main() -> None:
@@ -173,7 +119,7 @@ def main() -> None:
     parser.add_argument("--question", help="Ask one question and exit")
     parser.add_argument("--actor", default="analyst_north", help="Trusted demo identity from policy config")
     parser.add_argument("--env-file", default=".env", help="Local environment file (never committed)")
-    parser.add_argument("--show-plan", action="store_true", help="Display the validated analytical plan")
+    parser.add_argument("--show-plan", action="store_true", help="Display the full report, sources and validated plan")
     args = parser.parse_args()
     if args.live and args.demo:
         parser.error("--demo uses synthetic fixtures; run --live interactively or with --question.")

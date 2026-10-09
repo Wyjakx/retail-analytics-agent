@@ -32,7 +32,7 @@ PROBES = [
     ("invented-report-number", "safety", "validate_report",
      "if numeric not in allowed:", "if False:",
      "test_application.py::test_unsafe_report_is_replaced_before_display_and_save[invented-amount]"),
-    ("revoked-history-retained", "service", "AnalyticsService._scope",
+    ("revoked-history-retained", "service", "AnalyticsService.refresh_scope",
      "self.context.history.clear()", "pass",
      "test_application.py::test_revoking_permissions_invalidates_previous_context_and_pending_delete"),
     ("missing-plan-budget-preflight", "service", "AnalyticsService._analyze",
@@ -50,6 +50,9 @@ PROBES = [
     ("confirmation-valid-at-expiry", "reports", "ReportStore.confirm_delete",
      'self._timestamp() >= operation["expires_at"]', 'self._timestamp() > operation["expires_at"]',
      "test_storage_transactions.py::test_restart_preserves_confirmation_but_expiry_prevents_deletion[at-expiry]"),
+    ("last-calendar-day-omitted", "service", "AnalyticsService._handle",
+     "plan = enforce_explicit_periods(report_question, plan)", "plan = plan",
+     "test_application.py::test_explicit_comparison_keeps_last_included_day_in_calculations[inclusive-conversion]"),
 ]
 
 

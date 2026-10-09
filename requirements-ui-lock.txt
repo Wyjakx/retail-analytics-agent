@@ -1,0 +1,16 @@
+# Optional Streamlit UI; preserves the frozen core dependencies.
+-r requirements-lock.txt
+Jinja2==3.1.6
+MarkupSafe==3.0.4
+altair==6.3.0
+httptools==0.8.0
+itsdangerous==2.2.0
+narwhals==2.26.0
+numpy==2.5.3
+pandas==3.0.6
+pillow==12.3.0
+pyarrow==25.0.1
+pydeck==0.9.3
+streamlit==1.65.0
+toml==0.10.2
+tzdata==2026.5

@@ -2,7 +2,7 @@
 
 A conversational analytics assistant for retail executives, using Python, Google ADK 2, Gemini and BigQuery.
 
-**Status: runnable local prototype with a verified live CLI smoke test.** With application-default credentials, Gemini planning, BigQuery execution and Gemini report generation completed one real analysis; all six metrics matched independent SQL. The offline CLI, multi-turn follow-ups, saved reports and safety/error-handling boundaries are tested locally. Broader live scenarios still need validation. The production architecture is a design proposal, not a deployment.
+**Status: runnable local prototype with verified live CLI and Streamlit smoke tests.** With application-default credentials, Gemini planning, BigQuery execution and Gemini report generation completed real analyses; all six metrics matched independent SQL in the CLI check. The offline CLI, multi-turn follow-ups, saved reports and safety/error-handling boundaries are tested locally. Broader live scenarios still need validation. The production architecture is a design proposal, not a deployment.
 
 ## Intended user experience
 
@@ -14,7 +14,7 @@ Report deletion follows a separate flow: identify the current user's matching re
 
 | Component | Choice | Responsibility |
 | --- | --- | --- |
-| Chat interface | Rich-based Python CLI | Conversation, tables, progress and confirmation previews |
+| Chat interface | Rich CLI + optional Streamlit | Conversation, evidence tables/charts and confirmation previews |
 | Model orchestration | Google ADK 2 | Typed model-stage workflows, explicit routes and bounded model calls |
 | Model integration | Gemini through ADK | Analysis planning and grounded report generation |
 | Analytics gateway | BigQuery Python client | Trusted product scope, controlled SQL generation, query budgets and safe results |
@@ -39,7 +39,7 @@ The dataset is `bigquery-public-data.thelook_ecommerce`; the required tables are
 | Quality and UX evaluation | Numerical, adversarial, ADK-runtime and CLI tests; scripted demonstration | Live analytical evaluation, analyst review and user studies |
 | Persona management | Design only | Versioned nondeveloper configuration with rollback; security policy stays separate |
 
-The client accepted predefined demo users and stable pseudonymous customer analyses. The local selector and explicit product mapping demonstrate authorization; production scopes would arrive through a verified frontend JWT. Customer rankings use actor-scoped opaque references, with raw IDs retained inside the Python gateway. Charts, email and web research are extension points in the design.
+The client accepted predefined demo users and stable pseudonymous customer analyses. The local selector and explicit product mapping demonstrate authorization; production scopes would arrive through a verified frontend JWT. Customer rankings use actor-scoped opaque references, with raw IDs retained inside the Python gateway. Streamlit charts approved evidence; email and web research remain extension points in the design.
 
 ## Documents
 
@@ -76,6 +76,7 @@ The demo uses two queries for the monthly comparison, follows up by product, sav
 ```text
 /save Q1 analysis
 /reports
+/open REPORT_ID
 /delete conversation
 /delete mention Q1
 /delete id REPORT_ID
@@ -87,6 +88,55 @@ The demo uses two queries for the monthly comparison, follows up by product, sav
 ```
 
 Natural-language deletion also accepts `Delete all reports mentioning Client X` and `Delete all the reports we made in this conversation`. A plain `yes` cannot execute deletion. The model never receives report confirmation tokens; the CLI handles them separately.
+
+The CLI shows a short answer and readable tables by default. Ungrouped totals use a
+two-column metric/value table; wider grouped results stack their fields to fit the terminal.
+Periods, product scope, privacy suppression, incomplete results and fallback notices remain
+visible. `/explain` displays the complete last report, metric definitions, source IDs and
+validated plan without querying again. `--show-plan` selects detailed output for the run.
+Saved reports retain their full content. Neither view recalculates totals or assumes a currency.
+
+## Optional Streamlit interface
+
+Install the separate UI lock into the same environment, then launch from the repository:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-ui-lock.txt
+.\.venv\Scripts\python.exe -m pip install --no-deps -e .
+.\.venv\Scripts\python.exe -m streamlit run streamlit_app.py --server.address 127.0.0.1
+```
+
+Open the local URL printed by Streamlit. Offline is selected by default and uses synthetic
+data. Ask `Show revenue by product`, then answer `2025` when prompted. The sidebar applies
+actor and mode changes together and starts a fresh conversation. Live uses the configuration
+below and only submits an analysis when you send a question or click an example.
+The original CLI installation remains valid without Streamlit; UI tests are skipped when
+that optional dependency is absent. CI installs the UI lock to exercise both interfaces.
+
+Chat starts with a concise answer. Ungrouped totals appear as metric cards copied from the
+approved evidence; tables and source IDs are under **View data and sources**, and definitions
+under **Scope and definitions**. Scope, suppression and truncation notices remain visible.
+If model reporting fails or its output is rejected, a disclosed, deterministic explanation
+uses the approved results. Saved reports retain the complete Markdown and evidence.
+
+For a short demonstration:
+
+1. Click **Compare January and February 2025**, then ask `Now compare by product`.
+2. Inspect the report, evidence tables and individual charts. Change the chart metric if available.
+3. In **Report library**, save the latest analysis with a title, select its ID and open it.
+4. Ask `Top 5 customers by spending in 2025`, then `Break down cust_REFERENCE_FROM_RESULTS by month`.
+5. Try `Show customer emails` to see the refusal.
+6. In **Delete reports**, preview a report, cancel, preview again and confirm the exact selection.
+7. Start a **New conversation**, or apply `analyst_south` to demonstrate a different product scope.
+
+Each browser session owns its conversation, last 20 sanitized chat turns and customer linkage.
+Reloading/disconnecting can lose that state; it is not a durable conversation history. New
+conversation and actor/mode changes cancel pending confirmation and clear prior analysis.
+Current permissions are checked before retained results are displayed. Saved reports persist
+in the same mode directory as the CLI and are shared by local sessions with the same actor.
+Opening a saved report rechecks its current contents and access on every rerun. Deletion
+requires a separate button click against an expiring, frozen selection; tokens stay private.
+The documented launch binds to loopback for this local demo, which has no production authentication.
 
 ## Live Gemini and BigQuery
 
@@ -116,7 +166,7 @@ Customer references are HMAC-derived from an internal customer ID, the actor and
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m ruff check src tests
+.\.venv\Scripts\python.exe -m ruff check src tests streamlit_app.py
 ```
 
 The tests exercise application scenarios with independent transaction data and literal expected answers, the installed ADK/Google SDKs with simulated network responses, real SQLite transactions and actual CLI processes. Optional `python -m tests.effectiveness` probes verify that selected deliberate defects make the tests fail without editing source files. [Evaluation](docs/evaluation.md) records the contracts, verified results and remaining live/semantic review.
@@ -130,6 +180,10 @@ Runtime data goes under `APP_DATA_DIR` (default `runtime`), separated into `demo
 | File | Responsibility |
 | --- | --- |
 | `src/retail_agent/cli.py` | Chat, result presentation and human confirmation |
+| `src/retail_agent/cli_views.py` | Compact terminal answers, responsive tables and full diagnostic output |
+| `streamlit_app.py`, `src/retail_agent/streamlit_ui.py` | Optional browser entry point, session controls and chat |
+| `src/retail_agent/streamlit_views.py` | Approved evidence charts and saved-report controls |
+| `src/retail_agent/web_session.py`, `src/retail_agent/runtime.py` | Per-browser state, short-lived stores and shared runtime construction |
 | `src/retail_agent/service.py` | Request orchestration, current permissions, bounded correction and follow-up state |
 | `src/retail_agent/adk_workflow.py` | Actual ADK typed-output stages, model call budget and deadlines |
 | `src/retail_agent/model.py` | Gemini contracts, offline simulation and grounded fallback reports |
